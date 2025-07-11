@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOut, LayoutDashboard, ChevronDown, ChevronUp, Search, X, FileSpreadsheet, Printer } from 'lucide-react';
 
@@ -312,10 +312,23 @@ const AdminDashboard = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [filteredFacilities, setFilteredFacilities] = useState(MOCK_FACILITIES);
     const [expandedFacility, setExpandedFacility] = useState(null);
+    const chartContainerRef = useRef(null);
+    const [chartWidth, setChartWidth] = useState(0);
 
     useEffect(() => {
         setFilteredFacilities(MOCK_FACILITIES.filter(f => f.toLowerCase().includes(searchTerm.toLowerCase())));
     }, [searchTerm]);
+
+    useEffect(() => {
+        const handleResize = () => {
+            if (chartContainerRef.current) {
+                setChartWidth(chartContainerRef.current.offsetWidth);
+            }
+        };
+        handleResize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     const complianceData = MOCK_FACILITIES.map(facility => {
         let submitted = MOCK_PROGRAMS.filter(p => getStatusForProgram(facility, p, MOCK_SUBMISSIONS).text === 'Submitted').length;
@@ -344,11 +357,15 @@ const AdminDashboard = () => {
             </div>
             <div className="bg-white p-6 rounded-lg shadow-md">
                 <h2 className="text-xl font-semibold mb-4 text-gray-700">Compliance by Program</h2>
-                <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={MOCK_PROGRAMS.map(p => ({ name: p.name, Submitted: MOCK_SUBMISSIONS.filter(s => s.programName === p.name && getStatusForProgram(s.facilityName, p, MOCK_SUBMISSIONS).text === 'Submitted').length, Pending: MOCK_FACILITIES.length - MOCK_SUBMISSIONS.filter(s => s.programName === p.name && getStatusForProgram(s.facilityName, p, MOCK_SUBMISSIONS).text === 'Submitted').length }))}>
+                <div ref={chartContainerRef} style={{ width: '100%', height: 300 }}>
+                    <BarChart 
+                        width={chartWidth} 
+                        height={300} 
+                        data={MOCK_PROGRAMS.map(p => ({ name: p.name, Submitted: MOCK_SUBMISSIONS.filter(s => s.programName === p.name && getStatusForProgram(s.facilityName, p, MOCK_SUBMISSIONS).text === 'Submitted').length, Pending: MOCK_FACILITIES.length - MOCK_SUBMISSIONS.filter(s => s.programName === p.name && getStatusForProgram(s.facilityName, p, MOCK_SUBMISSIONS).text === 'Submitted').length }))}
+                    >
                         <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Legend /><Bar dataKey="Submitted" stackId="a" fill="#14b8a6" /><Bar dataKey="Pending" stackId="a" fill="#f59e0b" />
                     </BarChart>
-                </ResponsiveContainer>
+                </div>
             </div>
             <div className="bg-white p-6 rounded-lg shadow-md">
                 <h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Submission Status</h2>
