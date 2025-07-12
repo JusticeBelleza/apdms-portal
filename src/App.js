@@ -352,6 +352,157 @@ const SettingsPage = ({ programs, userRole, db }) => {
     );
 };
 
+const FacilityManagementPage = ({ facilities, db, userRole }) => {
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [sortConfig, setSortConfig] = useState({ key: null, direction: 'ascending' });
+
+    const sortedFacilities = [...facilities].sort((a, b) => {
+        if (!sortConfig.key) return 0;
+
+        const aValue = a[sortConfig.key];
+        const bValue = b[sortConfig.key];
+
+        if (aValue < bValue) {
+            return sortConfig.direction === 'ascending' ? -1 : 1;
+        }
+        if (aValue > bValue) {
+            return sortConfig.direction === 'ascending' ? 1 : -1;
+        }
+        return 0;
+    }).filter(f => f.name !== 'Provincial Health Office'); // Filter out PHO
+
+    const requestSort = (key) => {
+        let direction = 'ascending';
+        if (sortConfig.key === key && sortConfig.direction === 'ascending') {
+            direction = 'descending';
+        }
+        setSortConfig({ key, direction });
+    };
+
+    const getSortIndicator = (key) => {
+        if (sortConfig.key === key) {
+            return sortConfig.direction === 'ascending' ? <ChevronUp className="w-4 h-4 ml-1" /> : <ChevronDown className="w-4 h-4 ml-1" />;
+        }
+        return null;
+    };
+
+    const handleDeleteFacility = async (facilityId) => {
+        if (userRole === 'Super Admin' && window.confirm('Are you sure you want to delete this facility? All associated users and submissions will be affected.')) {
+            try {
+                // In a real application, you would also need to delete/update associated users and submissions
+                // For simplicity, this example only deletes the facility document.
+                await deleteDoc(doc(db, "facilities", facilityId));
+                alert('Facility deleted successfully!');
+            } catch (error) {
+                alert(`Error deleting facility: ${error.message}`);
+            }
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <h1 className="text-3xl font-bold text-gray-800">Manage Facilities</h1>
+                {userRole === 'Super Admin' && (
+                    <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                        <PlusCircle className="w-5 h-5 mr-2" />
+                        Add Facility
+                    </button>
+                )}
+            </div>
+            <div className="bg-white p-6 rounded-lg shadow-md">
+                <h2 className="text-xl font-semibold mb-4 text-gray-700">Existing Facilities</h2>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-900" onClick={() => requestSort('name')}>
+                                    <div className="flex items-center">Facility Name {getSortIndicator('name')}</div>
+                                </th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-900" onClick={() => requestSort('type')}>
+                                    <div className="flex items-center">Facility Type {getSortIndicator('type')}</div>
+                                </th>
+                                {userRole === 'Super Admin' && <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>}
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {sortedFacilities.map(facility => (
+                                <tr key={facility.id}>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{facility.name}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{facility.type}</td>
+                                    {userRole === 'Super Admin' && (
+                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <button onClick={() => handleDeleteFacility(facility.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center">
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </td>
+                                    )}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {showAddModal && <AddFacilityModal onClose={() => setShowAddModal(false)} db={db} />}
+        </div>
+    );
+};
+
+const AddFacilityModal = ({ onClose, db }) => {
+    const [facilityName, setFacilityName] = useState('');
+    const [facilityType, setFacilityType] = useState('Primary Care Facility');
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!facilityName) {
+            alert('Facility name cannot be empty.');
+            return;
+        }
+
+        try {
+            const newFacility = {
+                name: facilityName,
+                type: facilityType,
+            };
+            await addDoc(collection(db, "facilities"), newFacility);
+            alert('Facility added successfully!');
+            onClose();
+        } catch (error) {
+            alert(`Error adding facility: ${error.message}`);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 relative">
+                <button onClick={onClose} className="absolute top-3 right-3 p-1 rounded-full hover:bg-gray-200">
+                    <X className="w-5 h-5 text-gray-600" />
+                </button>
+                <h2 className="text-xl font-bold text-gray-800 mb-4">Add New Facility</h2>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Facility Type</label>
+                        <select value={facilityType} onChange={e => setFacilityType(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
+                            <option>Primary Care Facility</option>
+                            <option>Government Hospital</option>
+                            <option>Private Hospital</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Facility Name</label>
+                        <input type="text" value={facilityName} onChange={e => setFacilityName(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" placeholder="e.g., Abra Provincial Hospital" required />
+                    </div>
+                    <div className="mt-6 flex justify-end space-x-3">
+                        <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
+                        <button type="submit" className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700">Add Facility</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+
 const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db }) => {
     const [showAddModal, setShowAddModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
@@ -363,12 +514,13 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     const isSuperAdmin = currentUser.role === 'Super Admin';
     const isFacilityAdmin = currentUser.role === 'Facility Admin';
     
-    const phoUsers = users
+    const phoUsers = [...users]
         .filter(u => u.facilityName === 'Provincial Health Office' && u.role !== 'Super Admin')
         .sort((a,b) => a.name.localeCompare(b.name));
 
-    const facilityUsers = users
+    const facilityUsers = [...users]
         .filter(u => u.facilityName !== 'Provincial Health Office')
+        .sort((a,b) => a.facilityName.localeCompare(b.facilityName) || a.name.localeCompare(b.name)) // Sort by facility name, then user name
         .reduce((acc, user) => {
             const { facilityName } = user;
             if (!acc[facilityName]) {
@@ -835,6 +987,7 @@ export default function App() {
                     {page === 'dashboard' && (user.role === 'PHO Admin' || user.role === 'Super Admin' || user.role === 'Facility Admin') && <AdminDashboard facilities={facilities} programs={activePrograms} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} userRole={user.role} />}
                     {page === 'dashboard' && user.role === 'Viewer' && <AdminDashboard facilities={facilities} programs={activePrograms} submissions={submissions} users={users} isViewer={true} />}
                     {page === 'reports' && (user.role === 'PHO Admin' || user.role === 'Viewer' || user.role === 'Super Admin' || user.role === 'Facility Admin') && <ReportsPage programs={activePrograms} submissions={submissions} users={users} />}
+                    {page === 'facilities' && user.role === 'Super Admin' && <FacilityManagementPage facilities={facilities} db={db} userRole={user.role} />}
                     {page === 'settings' && (user.role === 'PHO Admin' || user.role === 'Super Admin') && <SettingsPage programs={programs} setPrograms={setPrograms} userRole={user.role} db={db} />}
                     {page === 'users' && (user.role === 'Super Admin' || user.role === 'Facility Admin') && <UserManagementPage users={users} setUsers={setUsers} facilities={facilities} programs={programs} currentUser={loggedInUserDetails} auth={auth} db={db} />}
                     {page === 'submissions' && <SubmissionsHistory user={user} submissions={submissions} setSubmissions={setSubmissions} db={db} />}
