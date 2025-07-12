@@ -93,7 +93,7 @@ const exportToCSV = (data, filename) => {
     if (data.length === 0) return;
 
     const headers = Object.keys(data[0]);
-    const csvContent = "data:text/csv;charset=utf-8," 
+    const csvContent = "data:text/csv;charset=utf-8,"
         + [headers.join(","), ...data.map(row => headers.map(header => JSON.stringify(row[header])).join(","))].join("\n");
 
     const link = document.createElement("a");
@@ -132,7 +132,19 @@ const Sidebar = ({ user, onNavigate, onLogout, currentPage }) => {
     ];
     const filteredNavItems = navItems.filter(item => item.role.includes(user.role));
     return (
-        <aside className="hidden md:flex flex-col w-64 bg-gray-800 text-white"><div className="flex items-center justify-center h-20 border-b border-gray-700"><img src="https://placehold.co/40x40/1a202c/76e2d9?text=A" alt="Logo" className="w-10 h-10 rounded-full" /><h1 className="text-xl font-bold ml-2">APDMS</h1></div><nav className="flex-1 px-4 py-4 space-y-2">{filteredNavItems.map(item => (<button key={item.id} onClick={() => onNavigate(item.id)} className={`w-full flex items-center px-4 py-2 rounded-lg transition-colors duration-200 ${currentPage === item.id ? 'bg-primary text-white' : 'hover:bg-gray-700'}`}>{item.icon}<span className="ml-3">{item.label}</span></button>))}</nav><div className="px-4 py-4 border-t border-gray-700"><button onClick={onLogout} className="w-full flex items-center px-4 py-2 rounded-lg hover:bg-red-600 transition-colors duration-200"><LogOut className="w-5 h-5" /><span className="ml-3">Logout</span></button></div></aside>
+        <>
+            {/* Desktop Sidebar */}
+            <aside className="hidden md:flex flex-col w-64 bg-gray-800 text-white"><div className="flex items-center justify-center h-20 border-b border-gray-700"><img src="https://placehold.co/40x40/1a202c/76e2d9?text=A" alt="Logo" className="w-10 h-10 rounded-full" /><h1 className="text-xl font-bold ml-2">APDMS</h1></div><nav className="flex-1 px-4 py-4 space-y-2">{filteredNavItems.map(item => (<button key={item.id} onClick={() => onNavigate(item.id)} className={`w-full flex items-center px-4 py-2 rounded-lg transition-colors duration-200 ${currentPage === item.id ? 'bg-primary text-white' : 'hover:bg-gray-700'}`}>{item.icon}<span className="ml-3">{item.label}</span></button>))}</nav><div className="px-4 py-4 border-t border-gray-700"><button onClick={onLogout} className="w-full flex items-center px-4 py-2 rounded-lg hover:bg-red-600 transition-colors duration-200"><LogOut className="w-5 h-5" /><span className="ml-3">Logout</span></button></div></aside>
+
+            {/* Mobile Bottom Bar */}
+            <div className="md:hidden fixed bottom-0 left-0 right-0 bg-gray-800 text-white flex justify-around p-2 border-t border-gray-700 z-50">
+                {filteredNavItems.map(item => (
+                    <button key={item.id} onClick={() => onNavigate(item.id)} className={`flex flex-col items-center p-2 rounded-lg ${currentPage === item.id ? 'text-primary' : 'hover:bg-gray-700'}`}>
+                        {item.icon}
+                    </button>
+                ))}
+            </div>
+        </>
     );
 };
 
@@ -498,16 +510,16 @@ const FacilityManagementPage = ({ facilities, db, userRole }) => {
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
-                <h1 className="text-3xl font-bold text-gray-800">Manage Facilities</h1>
+                <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Manage Facilities</h1>
                 {userRole === 'Super Admin' && (
                     <div className="flex space-x-2">
-                        <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                            <Download className="w-5 h-5 mr-2" />
-                            Export to CSV
+                        <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                            <Download className="w-5 h-5 md:mr-2" />
+                            <span className="hidden md:inline">Export to CSV</span>
                         </button>
-                        <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                            <PlusCircle className="w-5 h-5 mr-2" />
-                            Add Facility
+                        <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                            <PlusCircle className="w-5 h-5 md:mr-2" />
+                            <span className="hidden md:inline">Add Facility</span>
                         </button>
                     </div>
                 )}
@@ -687,14 +699,13 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     };
 
     const UserRow = ({user}) => (
-        <div className="grid grid-cols-5 gap-4 py-3 px-4 items-center">
-            <div className="col-span-1">
+        <div className="flex flex-col md:flex-row md:items-center justify-between py-3 px-4">
+            <div>
                 <p className="font-medium text-gray-900">{user.name}</p>
                 <p className="text-sm text-gray-500">{user.email}</p>
+                <p className="text-sm text-gray-600 md:hidden">{user.facilityName} - {user.role}</p>
             </div>
-            <p className="col-span-1 text-sm text-gray-600">{user.facilityName}</p>
-            <p className="col-span-1 text-sm text-gray-600">{user.role}</p>
-            <div className="col-span-2 text-right flex items-center justify-end space-x-2">
+            <div className="flex items-center space-x-2 mt-2 md:mt-0">
                 {user.role !== 'Super Admin' && (
                     <label htmlFor={`toggle-active-${user.id}`} className={`flex items-center ${user.id === currentUser.id ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                         <div className="relative">
@@ -722,23 +733,23 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
-                <h1 className="text-3xl font-bold text-gray-800">Manage Users</h1>
+                <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Manage Users</h1>
                 <div className="flex space-x-2">
                     {isSuperAdmin && (
-                        <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                            <Download className="w-5 h-5 mr-2" />
-                            Export Users
+                        <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                            <Download className="w-5 h-5 md:mr-2" />
+                            <span className="hidden md:inline">Export Users</span>
                         </button>
                     )}
                     {isSuperAdmin && (
-                        <button onClick={() => setShowAddFacilityAdminModal(true)} className="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                            <Building className="w-5 h-5 mr-2"/>
-                            Add Facility Admin
+                        <button onClick={() => setShowAddFacilityAdminModal(true)} className="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                            <Building className="w-5 h-5 md:mr-2"/>
+                            <span className="hidden md:inline">Add Facility Admin</span>
                         </button>
                     )}
-                    <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                        <PlusCircle className="w-5 h-5 mr-2"/>
-                        Add User
+                    <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                        <PlusCircle className="w-5 h-5 md:mr-2"/>
+                        <span className="hidden md:inline">Add User</span>
                     </button>
                 </div>
             </div>
@@ -1280,6 +1291,7 @@ export default function App() {
                     {page === 'submissions' && <SubmissionsHistory user={user} submissions={submissions} setSubmissions={setSubmissions} db={db} />}
                     {page === 'profile' && <Profile user={user} />}
                     {page === 'audit' && user.role === 'Super Admin' && <AuditLogPage db={db} />}
+                    <div className="h-20 md:hidden" />
                 </div>
             </main>
             {showAnnouncementsModal && <AnnouncementModal onClose={() => setShowAnnouncementsModal(false)} onSave={handleAddAnnouncement} announcements={announcements} userRole={user.role} onDelete={handleDeleteAnnouncement} />}
