@@ -56,12 +56,57 @@ const getStatusForProgram = (facilityName, program, submissions) => {
 };
 
 const getMorbidityWeek = (d = new Date()) => {
-    const date = new Date(d.getTime());
+    const date = new Date(d.valueOf());
     date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
-    const week1 = new Date(date.getFullYear(), 0, 4);
-    return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+    // Sunday is the first day of the week
+    const day = date.getDay();
+    const diff = date.getDate() - day;
+    const startOfWeek = new Date(date.setDate(diff));
+
+    const year = startOfWeek.getFullYear();
+    // The first week is the one with Jan 4th in it
+    const jan4 = new Date(year, 0, 4);
+    jan4.setHours(0, 0, 0, 0);
+    const firstDayOfWeek1 = new Date(jan4.setDate(jan4.getDate() - jan4.getDay()));
+
+    const diffMillis = startOfWeek - firstDayOfWeek1;
+    const oneWeek = 7 * 24 * 60 * 60 * 1000;
+    const week = Math.round(diffMillis / oneWeek) + 1;
+    
+    if (week > 52) {
+        const nextYearJan4 = new Date(year + 1, 0, 4);
+        nextYearJan4.setHours(0, 0, 0, 0);
+        const nextYearFirstDayOfWeek1 = new Date(nextYearJan4.setDate(nextYearJan4.getDate() - nextYearJan4.getDay()));
+        if (startOfWeek >= nextYearFirstDayOfWeek1) {
+            return 1;
+        }
+    }
+    
+    if (week < 1) {
+         const prevYearJan4 = new Date(year - 1, 0, 4);
+         prevYearJan4.setHours(0, 0, 0, 0);
+         const prevYearFirstDayOfWeek1 = new Date(prevYearJan4.setDate(prevYearJan4.getDate() - prevYearJan4.getDay()));
+         const prevYearDiffMillis = startOfWeek - prevYearFirstDayOfWeek1;
+         return Math.round(prevYearDiffMillis / oneWeek) + 1;
+    }
+    
+    return week;
+};
+
+const getDatesForMorbidityWeek = (week, year) => {
+    const jan4 = new Date(year, 0, 4);
+    jan4.setHours(0, 0, 0, 0);
+    const firstDayOfWeek1 = new Date(jan4.setDate(jan4.getDate() - jan4.getDay()));
+    
+    const startDate = new Date(firstDayOfWeek1);
+    startDate.setDate(startDate.getDate() + (week - 1) * 7);
+
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 6);
+
+    return { startDate, endDate };
 }
+
 const generateMorbidityWeeks = () => {
     const weeks = [];
     const currentWeek = getMorbidityWeek();
@@ -149,23 +194,26 @@ const Sidebar = ({ user, onNavigate, onLogout, currentPage }) => {
 };
 
 const Header = ({ user, onLogout, unreadCount, onBellClick }) => (
-    <header className="flex items-center justify-between h-20 px-6 bg-white border-b">
+    <header className="flex items-center justify-between h-auto md:h-20 p-2 sm:p-4 bg-white border-b">
         <div>
-            <h2 className="text-lg font-semibold text-gray-800">Welcome, {user.name}!</h2>
-            <p className="text-sm text-gray-500">{user.facilityName} - {user.role}</p>
+            <h2 className="text-base sm:text-lg font-semibold text-gray-800 truncate">Welcome, {user.name}!</h2>
+            <p className="text-xs sm:text-sm text-gray-500">
+                <span className="hidden sm:inline">{user.facilityName} - </span>
+                <span>{user.role}</span>
+            </p>
             <div className="flex items-center text-xs text-gray-500 mt-1">
                 <Calendar className="w-4 h-4 mr-1.5" />
                 <span>Morbidity Week: {getMorbidityWeek()}</span>
             </div>
         </div>
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-1 sm:space-x-2">
             <button onClick={onBellClick} className="relative p-2 rounded-full hover:bg-gray-200">
-                <Bell className="w-6 h-6 text-gray-600" />
+                <Bell className="w-5 h-5 sm:w-6 sm:h-6 text-gray-600" />
                 {unreadCount > 0 && (
                     <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"></span>
                 )}
             </button>
-            <button onClick={onLogout} className="md:hidden p-2 rounded-full hover:bg-gray-200"><LogOut className="w-5 h-5 text-gray-600" /></button>
+            <button onClick={onLogout} className="p-2 rounded-full hover:bg-gray-200"><LogOut className="w-5 h-5 text-gray-600" /></button>
         </div>
     </header>
 );
@@ -200,7 +248,7 @@ const FacilityDashboard = ({ user, allPrograms, submissions, setSubmissions, db 
     const userPrograms = allPrograms.filter(p => p.active && user.assignedPrograms.includes(p.id));
 
     return (
-        <div className="space-y-6"><h1 className="text-3xl font-bold text-gray-800">Your Reporting Dashboard</h1><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Reporting Obligations Checklist</h2><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Frequency</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userPrograms.map(program => { const status = getStatusForProgram(user.facilityName, program, submissions); return (<tr key={program.id} className={status.text === 'Overdue' ? 'bg-red-50' : ''}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{program.name}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{program.frequency}</td><td className="px-6 py-4 whitespace-nowrap text-sm"><span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span></td><td className="px-6 py-4 whitespace-nowrap text-sm font-medium">{program.type === 'upload' ? (<button onClick={() => handleUploadClick(program)} className="text-primary hover:text-secondary flex items-center"><Upload className="w-4 h-4 mr-1"/> Upload Report</button>) : (<button onClick={() => handleUploadClick(program)} className="text-indigo-600 hover:text-indigo-900 flex items-center"><Upload className="w-4 h-4 mr-1"/> Upload Proof</button>)}</td></tr>);})}</tbody></table></div></div>{showUploadModal && <UploadModal program={selectedProgram} onClose={() => setShowUploadModal(false)} onFileUpload={handleFileUpload} />}</div>
+        <div className="space-y-6"><h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Your Reporting Dashboard</h1><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Reporting Obligations Checklist</h2><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Frequency</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userPrograms.map(program => { const status = getStatusForProgram(user.facilityName, program, submissions); return (<tr key={program.id} className={status.text === 'Overdue' ? 'bg-red-50' : ''}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{program.name}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{program.frequency}</td><td className="px-6 py-4 whitespace-nowrap text-sm"><span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span></td><td className="px-6 py-4 whitespace-nowrap text-sm font-medium">{program.type === 'upload' ? (<button onClick={() => handleUploadClick(program)} className="text-primary hover:text-secondary flex items-center"><Upload className="w-4 h-4 mr-1"/> Upload Report</button>) : (<button onClick={() => handleUploadClick(program)} className="text-indigo-600 hover:text-indigo-900 flex items-center"><Upload className="w-4 h-4 mr-1"/> Upload Proof</button>)}</td></tr>);})}</tbody></table></div></div>{showUploadModal && <UploadModal program={selectedProgram} onClose={() => setShowUploadModal(false)} onFileUpload={handleFileUpload} />}</div>
     );
 };
 
@@ -244,7 +292,7 @@ const AdminDashboard = ({ facilities, programs, submissions, users, isViewer = f
     });
 
     return (
-        <div className="space-y-6"><h1 className="text-3xl font-bold text-gray-800">Provincial Compliance Dashboard</h1>
+        <div className="space-y-6"><h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Provincial Compliance Dashboard</h1>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-teal-100"><CheckCircle2 className="w-6 h-6 text-primary" /></div><div className="ml-4"><p className="text-sm text-gray-500">Compliance Rate</p><p className="text-2xl font-bold text-gray-800">{complianceRate}%</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-green-100"><FileText className="w-6 h-6 text-green-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Submitted</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalSubmitted}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-yellow-100"><Clock className="w-6 h-6 text-yellow-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Pending/Overdue</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalPending}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-blue-100"><User className="w-6 h-6 text-blue-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Reporting Facilities</p><p className="text-2xl font-bold text-gray-800">{facilities.length}</p></div></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Compliance by Program</h2><div ref={chartContainerRef} style={{ width: '100%', height: 300 }}><BarChart width={chartWidth} height={300} data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Legend /><Bar dataKey="Submitted" stackId="a" fill="#14b8a6" /><Bar dataKey="Pending" stackId="a" fill="#f59e0b" /></BarChart></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Submission Status</h2><div className="relative mb-4"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" /><input type="text" placeholder="Search for a facility..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"/></div>
         <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
             {Object.keys(facilitiesByType).sort().map(type => (
@@ -287,20 +335,29 @@ const AdminDashboard = ({ facilities, programs, submissions, users, isViewer = f
 };
 
 const ReportsPage = ({ programs, submissions, users }) => {
-    const [reportType, setReportType] = useState('Quarterly');
+    const [reportType, setReportType] = useState('');
     const [year, setYear] = useState(new Date().getFullYear());
     const [quarter, setQuarter] = useState(1);
+    const [month, setMonth] = useState(new Date().getMonth() + 1);
+    const [week, setWeek] = useState(getMorbidityWeek());
     const [selectedProgramId, setSelectedProgramId] = useState('');
     const [generatedReport, setGeneratedReport] = useState(null);
-
+    
+    const selectedProgram = programs.find(p => p.id === selectedProgramId);
+    
     useEffect(() => {
         if (programs.length > 0 && !selectedProgramId) {
             setSelectedProgramId(programs[0].id);
         }
     }, [programs, selectedProgramId]);
 
+    useEffect(() => {
+        if (selectedProgram && selectedProgram.reportTypes) {
+            setReportType(selectedProgram.reportTypes[0]);
+        }
+    }, [selectedProgram]);
+
     const handleGenerateReport = () => {
-        const selectedProgram = programs.find(p => p.id === selectedProgramId);
         if (!selectedProgram) {
             alert("Please select a program to generate a report.");
             return;
@@ -310,22 +367,46 @@ const ReportsPage = ({ programs, submissions, users }) => {
         const programId = selectedProgram.id;
         
         const facilitiesForReport = [...new Set(users
-            .filter(u => u.assignedPrograms.includes(programId))
+            .filter(u => u.assignedPrograms.includes(programId) && u.facilityName !== 'Provincial Health Office')
             .map(u => u.facilityName)
         )];
 
         let startDate, endDate;
         let title = '';
-        if (reportType === 'Quarterly') {
-            const startMonth = (quarter - 1) * 3;
-            startDate = new Date(year, startMonth, 1);
-            endDate = new Date(year, startMonth + 3, 0);
-            title = `Quarterly ${programName} Report - Q${quarter} ${year}`;
-        } else {
-            startDate = new Date(year, 0, 1);
-            endDate = new Date(year, 11, 31);
-            title = `Annual ${programName} Report - ${year}`;
+
+        
+        switch(reportType) {
+            case 'Morbidity Week':
+                const dates = getDatesForMorbidityWeek(week, year);
+                startDate = dates.startDate;
+                endDate = dates.endDate;
+                title = `${programName} Report - Morbidity Week ${week}, ${year}`;
+                break;
+            case 'Morbidity Month':
+                startDate = new Date(year, month - 1, 1);
+                endDate = new Date(year, month, 0);
+                title = `${programName} Report - ${startDate.toLocaleString('default', { month: 'long' })} ${year}`;
+                break;
+            case 'Morbidity Year':
+                startDate = new Date(year, 0, 1);
+                endDate = new Date(year, 11, 31);
+                title = `${programName} Report - ${year}`;
+                break;
+            case 'Quarterly':
+                const startMonth = (quarter - 1) * 3;
+                startDate = new Date(year, startMonth, 1);
+                endDate = new Date(year, startMonth + 3, 0);
+                title = `Quarterly ${programName} Report - Q${quarter} ${year}`;
+                break;
+            case 'Annual':
+                startDate = new Date(year, 0, 1);
+                endDate = new Date(year, 11, 31);
+                title = `Annual ${programName} Report - ${year}`;
+                break;
+            default:
+                break;
         }
+        
         const relevantSubmissions = submissions.filter(s => { const subDate = new Date(s.submissionDate); return s.programName === programName && subDate >= startDate && subDate <= endDate; });
         const reportData = facilitiesForReport.map(facility => {
             const facilitySubmissions = relevantSubmissions.filter(s => s.facilityName === facility);
@@ -338,7 +419,7 @@ const ReportsPage = ({ programs, submissions, users }) => {
     };
 
     return (
-        <div className="space-y-6"><h1 className="text-3xl font-bold text-gray-800">Report Generation</h1><div className="bg-white p-6 rounded-lg shadow-md print:hidden"><h2 className="text-xl font-semibold mb-4 text-gray-700">Consolidated Program Report</h2><div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div className="space-y-6"><h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Report Generation</h1><div className="bg-white p-6 rounded-lg shadow-md print:hidden"><h2 className="text-xl font-semibold mb-4 text-gray-700">Consolidated Program Report</h2><div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             <div>
                 <label className="block text-sm font-medium text-gray-700">Health Program</label>
                 <select value={selectedProgramId} onChange={e => setSelectedProgramId(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
@@ -346,39 +427,48 @@ const ReportsPage = ({ programs, submissions, users }) => {
                     {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
             </div>
-        <div><label className="block text-sm font-medium text-gray-700">Report Type</label><select value={reportType} onChange={e => setReportType(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"><option>Quarterly</option><option>Annual</option></select></div><div><label className="block text-sm font-medium text-gray-700">Year</label><select value={year} onChange={e => setYear(parseInt(e.target.value))} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"><option>{new Date().getFullYear()}</option><option>{new Date().getFullYear() - 1}</option></select></div>{reportType === 'Quarterly' && (<div><label className="block text-sm font-medium text-gray-700">Quarter</label><select value={quarter} onChange={e => setQuarter(parseInt(e.target.value))} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"><option value={1}>Q1 (Jan-Mar)</option><option value={2}>Q2 (Apr-Jun)</option><option value={3}>Q3 (Jul-Sep)</option><option value={4}>Q4 (Oct-Dec)</option></select></div>)}<button onClick={handleGenerateReport} className="bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300 h-10">Generate Report</button></div></div>{generatedReport && (<div id="report-view" className="bg-white p-8 rounded-lg shadow-md"><div className="flex justify-between items-start"><div><h2 className="text-2xl font-bold text-gray-900">{generatedReport.title}</h2><p className="text-sm text-gray-500">Reporting Period: {generatedReport.period}</p><p className="text-sm text-gray-500">Generated on: {new Date().toLocaleDateString()}</p></div><button onClick={() => window.print()} className="print:hidden flex items-center bg-gray-700 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded-lg transition duration-300"><Printer className="w-4 h-4 mr-2" />Print / Save as PDF</button></div><hr className="my-6" /><div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6"><div className="bg-gray-50 p-4 rounded-lg text-center"><p className="text-sm text-gray-600">Total Cases</p><p className="text-3xl font-bold text-primary">{generatedReport.totalCases}</p></div><div className="bg-gray-50 p-4 rounded-lg text-center"><p className="text-sm text-gray-600">Reporting Facilities</p><p className="text-3xl font-bold text-primary">{generatedReport.reportingFacilities}</p></div><div className="bg-gray-50 p-4 rounded-lg text-center"><p className="text-sm text-gray-600">Compliance Rate</p><p className="text-3xl font-bold text-primary">{generatedReport.totalFacilities > 0 ? ((generatedReport.reportingFacilities / generatedReport.totalFacilities) * 100).toFixed(1) : 0}%</p></div></div><h3 className="text-lg font-semibold mb-4 text-gray-700">Breakdown by Facility</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200 border"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submissions Made</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Cases Reported</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{generatedReport.breakdown.map(item => (<tr key={item.facilityName}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.facilityName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.submissionsCount}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800 font-bold">{item.totalCases}</td></tr>))}</tbody></table></div></div>)}</div>
+            {selectedProgram && (
+                <>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Report Type</label>
+                        <select value={reportType} onChange={e => setReportType(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
+                            {selectedProgram.reportTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                        </select>
+                    </div>
+                    {(reportType.includes('Year') || reportType.includes('Quarterly')) && <div><label className="block text-sm font-medium text-gray-700">Year</label><select value={year} onChange={e => setYear(parseInt(e.target.value))} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"><option>{new Date().getFullYear()}</option><option>{new Date().getFullYear() - 1}</option></select></div>}
+                    {reportType === 'Morbidity Month' && <div><label className="block text-sm font-medium text-gray-700">Month</label><select value={month} onChange={e => setMonth(parseInt(e.target.value))} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">{[...Array(12).keys()].map(m => <option key={m} value={m+1}>{new Date(0, m).toLocaleString('default', { month: 'long' })}</option>)}</select></div>}
+                    {reportType === 'Morbidity Week' && <div><label className="block text-sm font-medium text-gray-700">Week</label><select value={week} onChange={e => setWeek(parseInt(e.target.value))} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">{generateMorbidityWeeks().map(w => <option key={w} value={w}>{w}</option>)}</select></div>}
+                    {reportType === 'Quarterly' && (<div><label className="block text-sm font-medium text-gray-700">Quarter</label><select value={quarter} onChange={e => setQuarter(parseInt(e.target.value))} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"><option value={1}>Q1 (Jan-Mar)</option><option value={2}>Q2 (Apr-Jun)</option><option value={3}>Q3 (Jul-Sep)</option><option value={4}>Q4 (Oct-Dec)</option></select></div>)}
+                </>
+            )}
+            <button onClick={handleGenerateReport} className="bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300 h-10">Generate Report</button></div></div>{generatedReport && (<div id="report-view" className="bg-white p-8 rounded-lg shadow-md"><div className="flex justify-between items-start"><div><h2 className="text-2xl font-bold text-gray-900">{generatedReport.title}</h2><p className="text-sm text-gray-500">Reporting Period: {generatedReport.period}</p><p className="text-sm text-gray-500">Generated on: {new Date().toLocaleDateString()}</p></div><button onClick={() => window.print()} className="print:hidden flex items-center bg-gray-700 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded-lg transition duration-300"><Printer className="w-4 h-4 mr-2" />Print / Save as PDF</button></div><hr className="my-6" /><div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6"><div className="bg-gray-50 p-4 rounded-lg text-center"><p className="text-sm text-gray-600">Total Cases</p><p className="text-3xl font-bold text-primary">{generatedReport.totalCases}</p></div><div className="bg-gray-50 p-4 rounded-lg text-center"><p className="text-sm text-gray-600">Reporting Facilities</p><p className="text-3xl font-bold text-primary">{generatedReport.reportingFacilities}</p></div><div className="bg-gray-50 p-4 rounded-lg text-center"><p className="text-sm text-gray-600">Compliance Rate</p><p className="text-3xl font-bold text-primary">{generatedReport.totalFacilities > 0 ? ((generatedReport.reportingFacilities / generatedReport.totalFacilities) * 100).toFixed(1) : 0}%</p></div></div><h3 className="text-lg font-semibold mb-4 text-gray-700">Breakdown by Facility</h3><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200 border"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submissions Made</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Cases Reported</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{generatedReport.breakdown.map(item => (<tr key={item.facilityName}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{item.facilityName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.submissionsCount}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800 font-bold">{item.totalCases}</td></tr>))}</tbody></table></div></div>)}</div>
     );
 };
 
 const SettingsPage = ({ programs, userRole, db }) => {
-    const [newProgramName, setNewProgramName] = useState('');
-    const [newProgramFreq, setNewProgramFreq] = useState('Monthly');
-    const [newProgramType, setNewProgramType] = useState('upload');
+    const [showProgramModal, setShowProgramModal] = useState(false);
+    const [editingProgram, setEditingProgram] = useState(null);
     const isSuperAdmin = userRole === 'Super Admin';
 
-    const handleAddProgram = async (e) => {
-        e.preventDefault();
-        if (!newProgramName) {
-            alert('Program name cannot be empty.');
-            return;
-        }
-        const newProgram = {
-            id: newProgramName.toLowerCase().replace(/\s+/g, '-'),
-            name: newProgramName,
-            frequency: newProgramFreq,
-            type: newProgramType,
-            active: true,
-            core: false
-        };
-        
-        await setDoc(doc(db, "programs", newProgram.id), newProgram);
-        setNewProgramName('');
+    const handleAddProgram = () => {
+        setEditingProgram(null);
+        setShowProgramModal(true);
     };
     
-    const handleToggleProgram = async (programId, active) => {
-        if (!isSuperAdmin) return;
-        const programDocRef = doc(db, 'programs', programId);
-        await setDoc(programDocRef, { active: !active }, { merge: true });
+    const handleEditProgram = (program) => {
+        setEditingProgram(program);
+        setShowProgramModal(true);
+    };
+
+    const handleSaveProgram = async (programData) => {
+        if (editingProgram) {
+            const programDocRef = doc(db, 'programs', editingProgram.id);
+            await setDoc(programDocRef, programData, { merge: true });
+        } else {
+            const newProgramId = programData.name.toLowerCase().replace(/\s+/g, '-');
+            await setDoc(doc(db, "programs", newProgramId), { ...programData, id: newProgramId });
+        }
+        setShowProgramModal(false);
     };
 
     const handleDeleteProgram = async (programId) => {
@@ -389,71 +479,114 @@ const SettingsPage = ({ programs, userRole, db }) => {
 
     return (
         <div className="space-y-8">
-            <h1 className="text-3xl font-bold text-gray-800">Settings</h1>
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Settings</h1>
             <div className="bg-white p-6 rounded-lg shadow-md">
-                <h2 className="text-xl font-semibold mb-4 text-gray-700 border-b pb-3">Manage Health Programs</h2>
-                <div className="mt-4">
-                    <h3 className="text-lg font-medium text-gray-800 mb-2">Activate or Deactivate Programs</h3>
-                    <div className="space-y-2">
-                        {programs.map(program => (
-                            <div key={program.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
-                                <div>
-                                    <p className="font-semibold">{program.name}</p>
-                                    <p className="text-sm text-gray-500">Frequency: {program.frequency} | Type: {program.type}</p>
-                                </div>
-                                <div className="flex items-center space-x-4">
-                                    {isSuperAdmin && !program.core && (
-                                        <button onClick={() => handleDeleteProgram(program.id)} className="p-2 text-gray-400 hover:text-red-500 rounded-full">
-                                            <Trash2 className="w-5 h-5" />
-                                        </button>
-                                    )}
-                                    <label htmlFor={`toggle-${program.id}`} className={`flex items-center ${isSuperAdmin ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
-                                        <div className="relative">
-                                            <input type="checkbox" id={`toggle-${program.id}`} className="sr-only" checked={program.active} onChange={() => handleToggleProgram(program.id, program.active)} disabled={!isSuperAdmin}/>
-                                            <div className={`block w-12 h-6 rounded-full ${program.active ? 'bg-blue-500' : 'bg-red-500'} ${!isSuperAdmin ? 'opacity-50' : ''}`}></div>
-                                            <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ease-in-out ${program.active ? 'transform translate-x-6' : ''}`}></div>
-                                        </div>
-                                    </label>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-semibold text-gray-700">Manage Health Programs</h2>
+                    <button onClick={handleAddProgram} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                        <PlusCircle className="w-5 h-5 mr-2"/>
+                        Add Program
+                    </button>
                 </div>
-                 {isSuperAdmin && (
-                    <div className="mt-8 border-t pt-6">
-                        <h3 className="text-lg font-medium text-gray-800 mb-2">Add New Program</h3>
-                        <form onSubmit={handleAddProgram} className="space-y-4">
+                <div className="space-y-2">
+                    {programs.map(program => (
+                        <div key={program.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700">Program Name</label>
-                                <input type="text" value={newProgramName} onChange={e => setNewProgramName(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm" placeholder="e.g., Dengue Surveillance" />
+                                <p className="font-semibold">{program.name}</p>
+                                <p className="text-sm text-gray-500">Frequency: {program.frequency} | Type: {program.type}</p>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Frequency</label>
-                                    <select value={newProgramFreq} onChange={e => setNewProgramFreq(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
-                                        <option>Weekly</option>
-                                        <option>Monthly</option>
-                                        <option>Quarterly</option>
-                                    </select>
-                                </div>
-                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700">Submission Type</label>
-                                    <select value={newProgramType} onChange={e => setNewProgramType(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
-                                        <option value="upload">File Upload</option>
-                                        <option value="external">Mark as Submitted</option>
-                                    </select>
-                                </div>
+                            <div className="flex items-center space-x-2">
+                                <button onClick={() => handleEditProgram(program)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full">
+                                    <Edit className="w-5 h-5" />
+                                </button>
+                                {isSuperAdmin && !program.core && (
+                                    <button onClick={() => handleDeleteProgram(program.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full">
+                                        <Trash2 className="w-5 h-5" />
+                                    </button>
+                                )}
                             </div>
-                            <div className="text-right">
-                                 <button type="submit" className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300"><PlusCircle className="w-5 h-5 mr-2"/>Add Program</button>
-                            </div>
-                        </form>
-                    </div>
-                 )}
+                        </div>
+                    ))}
+                </div>
             </div>
+            {showProgramModal && <ProgramFormModal program={editingProgram} onClose={() => setShowProgramModal(false)} onSave={handleSaveProgram} />}
         </div>
     );
 };
+
+const ProgramFormModal = ({ program, onClose, onSave }) => {
+    const [formData, setFormData] = useState({
+        name: program?.name || '',
+        frequency: program?.frequency || 'Monthly',
+        type: program?.type || 'upload',
+        reportTypes: program?.reportTypes || ['Quarterly', 'Annual'],
+    });
+
+    const allReportTypes = ['Morbidity Week', 'Morbidity Month', 'Morbidity Year', 'Quarterly', 'Annual'];
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleReportTypeChange = (e) => {
+        const { options } = e.target;
+        const selectedTypes = [];
+        for (let i = 0, l = options.length; i < l; i++) {
+            if (options[i].selected) {
+                selectedTypes.push(options[i].value);
+            }
+        }
+        setFormData(prev => ({ ...prev, reportTypes: selectedTypes }));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formData);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 relative">
+                <button onClick={onClose} className="absolute top-3 right-3 p-1 rounded-full hover:bg-gray-200"><X className="w-5 h-5 text-gray-600"/></button>
+                <h2 className="text-xl font-bold text-gray-800 mb-4">{program ? 'Edit' : 'Add'} Program</h2>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Program Name</label>
+                        <input type="text" name="name" value={formData.name} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                         <div>
+                            <label className="block text-sm font-medium text-gray-700">Frequency</label>
+                            <select name="frequency" value={formData.frequency} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
+                                <option>Weekly</option>
+                                <option>Monthly</option>
+                                <option>Quarterly</option>
+                            </select>
+                        </div>
+                         <div>
+                            <label className="block text-sm font-medium text-gray-700">Submission Type</label>
+                            <select name="type" value={formData.type} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
+                                <option value="upload">File Upload</option>
+                                <option value="external">Mark as Submitted</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Report Types</label>
+                        <select multiple value={formData.reportTypes} onChange={handleReportTypeChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
+                            {allReportTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                        </select>
+                    </div>
+                    <div className="mt-6 flex justify-end space-x-3">
+                        <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
+                        <button type="submit" className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary">Save Program</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
 
 const FacilityManagementPage = ({ facilities, db, userRole }) => {
     const [showAddModal, setShowAddModal] = useState(false);
@@ -510,7 +643,7 @@ const FacilityManagementPage = ({ facilities, db, userRole }) => {
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
-                <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Manage Facilities</h1>
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Manage Facilities</h1>
                 {userRole === 'Super Admin' && (
                     <div className="flex space-x-2">
                         <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
@@ -733,7 +866,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
-                <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Manage Users</h1>
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Manage Users</h1>
                 <div className="flex space-x-2">
                     {isSuperAdmin && (
                         <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
@@ -794,7 +927,7 @@ const SubmissionsHistory = ({ user, submissions, setSubmissions, db }) => {
     };
     
     return (
-        <div className="space-y-6"><h1 className="text-3xl font-bold text-gray-800">Your Submission History</h1><div className="bg-white p-6 rounded-lg shadow-md"><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userSubmissions.length > 0 ? userSubmissions.map(sub => (<tr key={sub.id}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.uploaderName}</td><td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">{sub.fileURL && <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full inline-flex items-center"><Download className="w-4 h-4"/></a>}{!sub.confirmed && (<button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center"><Trash2 className="w-4 h-4"/></button>)}</td></tr>)) : (<tr><td colSpan="5" className="text-center py-10 text-gray-500">No submissions found.</td></tr>)}</tbody></table></div></div></div>
+        <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">Your Submission History</h1><div className="bg-white p-6 rounded-lg shadow-md"><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userSubmissions.length > 0 ? userSubmissions.map(sub => (<tr key={sub.id}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.uploaderName}</td><td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">{sub.fileURL && <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full inline-flex items-center"><Download className="w-4 h-4"/></a>}{!sub.confirmed && (<button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center"><Trash2 className="w-4 h-4"/></button>)}</td></tr>)) : (<tr><td colSpan="5" className="text-center py-10 text-gray-500">No submissions found.</td></tr>)}</tbody></table></div></div></div>
     );
 };
 
@@ -1004,7 +1137,7 @@ const AddFacilityAdminModal = ({ onClose, auth, db, facilities }) => {
 
 
 const Profile = ({ user }) => (
-    <div className="space-y-6"><h1 className="text-3xl font-bold text-gray-800">User Profile</h1><div className="bg-white p-8 rounded-lg shadow-md max-w-lg"><div className="space-y-4"><div><label className="block text-sm font-medium text-gray-500">Full Name</label><p className="text-lg text-gray-800">{user.name}</p></div><div><label className="block text-sm font-medium text-gray-500">Email Address</label><p className="text-lg text-gray-800">{user.email}</p></div><div><label className="block text-sm font-medium text-gray-500">Assigned Facility</label><p className="text-lg text-gray-800">{user.facilityName}</p></div><div><label className="block text-sm font-medium text-gray-500">Role</label><p className="text-lg text-gray-800">{user.role}</p></div></div><button className="mt-6 w-full bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">Edit Profile (Not Implemented)</button></div></div>
+    <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">User Profile</h1><div className="bg-white p-8 rounded-lg shadow-md max-w-lg"><div className="space-y-4"><div><label className="block text-sm font-medium text-gray-500">Full Name</label><p className="text-lg text-gray-800">{user.name}</p></div><div><label className="block text-sm font-medium text-gray-500">Email Address</label><p className="text-lg text-gray-800">{user.email}</p></div><div><label className="block text-sm font-medium text-gray-500">Assigned Facility</label><p className="text-lg text-gray-800">{user.facilityName}</p></div><div><label className="block text-sm font-medium text-gray-500">Role</label><p className="text-lg text-gray-800">{user.role}</p></div></div><button className="mt-6 w-full bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">Edit Profile (Not Implemented)</button></div></div>
 );
 
 const UploadModal = ({ program, onClose, onFileUpload }) => {
@@ -1099,7 +1232,7 @@ const AuditLogPage = ({ db }) => {
 
     return (
         <div className="space-y-6">
-            <h1 className="text-3xl font-bold text-gray-800">Audit Log</h1>
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Audit Log</h1>
             <div className="bg-white p-6 rounded-lg shadow-md">
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
@@ -1286,7 +1419,7 @@ export default function App() {
                     {page === 'dashboard' && user.role === 'Viewer' && <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} isViewer={true} announcements={announcements} />}
                     {page === 'reports' && (user.role === 'PHO Admin' || user.role === 'Viewer' || user.role === 'Super Admin' || user.role === 'Facility Admin') && <ReportsPage programs={programsForUser} submissions={submissions} users={users} />}
                     {page === 'facilities' && user.role === 'Super Admin' && <FacilityManagementPage facilities={facilities} db={db} userRole={user.role} />}
-                    {page === 'settings' && user.role === 'Super Admin' && <SettingsPage programs={programs} setPrograms={setPrograms} userRole={user.role} db={db} />}
+                    {page === 'settings' && user.role === 'Super Admin' && <SettingsPage programs={programs} userRole={user.role} db={db} />}
                     {page === 'users' && (user.role === 'Super Admin' || user.role === 'Facility Admin') && <UserManagementPage users={users} setUsers={setUsers} facilities={facilities} programs={programs} currentUser={loggedInUserDetails} auth={auth} db={db} />}
                     {page === 'submissions' && <SubmissionsHistory user={user} submissions={submissions} setSubmissions={setSubmissions} db={db} />}
                     {page === 'profile' && <Profile user={user} />}
