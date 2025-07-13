@@ -4,7 +4,7 @@ import { Bell, AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOu
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { getFirestore, collection, getDocs, getDoc, addDoc, setDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, orderBy, writeBatch, updateDoc } from "firebase/firestore";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getDatabase, ref, onValue, off, set, onDisconnect } from "firebase/database";
 
 
@@ -175,6 +175,24 @@ const exportToCSV = (data, filename) => {
     document.body.removeChild(link);
 };
 
+const getFileIcon = (fileName) => {
+    if (!fileName) return <FileText className="w-5 h-5 text-gray-500" />;
+    const extension = fileName.split('.').pop().toLowerCase();
+    switch (extension) {
+        case 'pdf':
+            return <FileText className="w-5 h-5 text-red-500" />;
+        case 'csv':
+            return <FileSpreadsheet className="w-5 h-5 text-green-500" />;
+        case 'xlsx':
+        case 'xls':
+            return <FileSpreadsheet className="w-5 h-5 text-green-700" />;
+        case 'mdb':
+            return <Database className="w-5 h-5 text-blue-500" />;
+        default:
+            return <FileText className="w-5 h-5 text-gray-500" />;
+    }
+};
+
 // --- UI & LAYOUT COMPONENTS ---
 
 const LoadingScreen = () => (
@@ -247,6 +265,22 @@ const Header = ({ user, onLogout, unreadCount, onBellClick }) => (
     </header>
 );
 
+const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+                <h2 className="text-xl font-bold text-gray-800 mb-4">{title}</h2>
+                <p className="text-gray-600 mb-6">{message}</p>
+                <div className="flex justify-end space-x-3">
+                    <button onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
+                    <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Confirm</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const FacilityDashboard = ({ user, allPrograms, submissions, setSubmissions, db }) => {
     const [showUploadModal, setShowUploadModal] = useState(false);
     const [selectedProgram, setSelectedProgram] = useState(null);
@@ -265,7 +299,7 @@ const FacilityDashboard = ({ user, allPrograms, submissions, setSubmissions, db 
             const newSubmission = {
                 facilityName: user.facilityName,
                 programName: selectedProgram.name,
-                submissionDate: new Date().toISOString().split('T')[0],
+                submissionDate: new Date().toISOString(),
                 status: 'Pending Confirmation',
                 fileURL: downloadURL, 
                 fileName: file.name,
@@ -1885,19 +1919,6 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
     const [selectedMonth, setSelectedMonth] = useState('');
 
-    const handleDeleteSubmission = async (subId) => {
-        if (window.confirm("Are you sure you want to permanently delete this submission? This action cannot be undone.")) {
-            try {
-                await deleteDoc(doc(db, "submissions", subId));
-                // Note: This does not delete the file from storage, only the record from Firestore.
-                // A more robust solution would involve a Cloud Function to handle file deletion from Storage.
-                alert("Submission record deleted successfully.");
-            } catch (error) {
-                alert(`Error deleting submission: ${error.message}`);
-            }
-        }
-    };
-
     const handleRequestDeletion = async (subId) => {
         if (window.confirm("Are you sure you want to request deletion for this submission? A Super Admin will need to approve it.")) {
             try {
@@ -1917,7 +1938,7 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
     };
 
     const filteredSubmissions = useMemo(() => {
-        let subs = submissions.filter(s => !s.deletionRequest); // Exclude items pending deletion
+        let subs = submissions.filter(s => s.confirmed && !s.deletionRequest); // Only show confirmed and not pending deletion
 
         // Role-based filtering
         if (user.role === 'PHO Admin') {
@@ -2001,6 +2022,7 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">File Name</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
@@ -2011,17 +2033,16 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.programName}</td>
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.facilityName}</td>
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.uploaderName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{sub.submissionDate}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 flex items-center">
+                                        {getFileIcon(sub.fileName)}
+                                        <span className="ml-2">{sub.fileName}</span>
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(sub.submissionDate).toLocaleString()}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
                                         <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-secondary inline-block">
                                             <Download className="w-5 h-5"/>
                                         </a>
-                                        {user.role === 'Super Admin' && (
-                                            <button onClick={() => handleDeleteSubmission(sub.id)} className="text-red-600 hover:text-red-800 inline-block">
-                                                <Trash2 className="w-5 h-5"/>
-                                            </button>
-                                        )}
-                                        {user.role === 'PHO Admin' && (
+                                        {(user.role === 'Super Admin' || user.role === 'PHO Admin') && (
                                             <button onClick={() => handleRequestDeletion(sub.id)} className="text-red-600 hover:text-red-800 inline-block">
                                                 <Trash2 className="w-5 h-5"/>
                                             </button>
@@ -2036,6 +2057,7 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
         </div>
     );
 };
+
 
 const DeletionRequestsPage = ({ submissions, onApprove, onDeny }) => {
     const requests = submissions.filter(s => s.deletionRequest);
@@ -2092,6 +2114,9 @@ export default function App() {
     const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
     const [onlineStatuses, setOnlineStatuses] = useState({});
     
+    const [showDeletionConfirmation, setShowDeletionConfirmation] = useState(false);
+    const [deletionInfo, setDeletionInfo] = useState({ subId: null, action: null });
+
     const auth = getAuth(app);
     const db = getFirestore(app);
 
@@ -2248,10 +2273,39 @@ export default function App() {
             await logAudit(db, user, "Delete Announcement", { announcementId });
         }
     };
+
+    const handleDeletionConfirm = (subId, action) => {
+        setDeletionInfo({ subId, action });
+        setShowDeletionConfirmation(true);
+    };
     
+    const executeDeletion = async () => {
+        if (deletionInfo.action === 'approve') {
+            await handleApproveDeletion(deletionInfo.subId);
+        } else if (deletionInfo.action === 'deny') {
+            await handleDenyDeletion(deletionInfo.subId);
+        }
+        setShowDeletionConfirmation(false);
+        setDeletionInfo({ subId: null, action: null });
+    };
+
     const handleApproveDeletion = async (subId) => {
-        await deleteDoc(doc(db, "submissions", subId));
-        alert('Deletion approved.');
+        const subDocRef = doc(db, "submissions", subId);
+        const subDoc = await getDoc(subDocRef);
+        if (subDoc.exists()) {
+            const subData = subDoc.data();
+            if (subData.fileURL) {
+                const fileRef = storageRef(storage, subData.fileURL);
+                try {
+                    await deleteObject(fileRef);
+                } catch (error) {
+                    console.error("Error deleting file from storage:", error);
+                    alert("Could not delete the file from storage, but the submission record will be removed.");
+                }
+            }
+        }
+        await deleteDoc(subDocRef);
+        alert('Deletion approved and file removed.');
     };
 
     const handleDenyDeletion = async (subId) => {
@@ -2309,7 +2363,7 @@ export default function App() {
                 if (user.permissions?.canViewAuditLog) return <AuditLogPage db={db} />;
                 break;
             case 'deletion-requests':
-                 if (user.role === 'Super Admin') return <DeletionRequestsPage submissions={submissions} onApprove={handleApproveDeletion} onDeny={handleDenyDeletion} />;
+                 if (user.role === 'Super Admin') return <DeletionRequestsPage submissions={submissions} onApprove={(subId) => handleDeletionConfirm(subId, 'approve')} onDeny={(subId) => handleDeletionConfirm(subId, 'deny')} />;
                  break;
             default:
                 return <FacilityDashboard user={loggedInUserDetails} allPrograms={activePrograms} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
@@ -2329,6 +2383,13 @@ export default function App() {
                 </div>
             </main>
             {showAnnouncementsModal && <AnnouncementModal onClose={() => setShowAnnouncementsModal(false)} onSave={handleAddAnnouncement} announcements={announcements} userRole={user.role} onDelete={handleDeleteAnnouncement} />}
+            <ConfirmationModal 
+                isOpen={showDeletionConfirmation}
+                onClose={() => setShowDeletionConfirmation(false)}
+                onConfirm={executeDeletion}
+                title="Confirm Action"
+                message="Are you sure you want to proceed with this action? This cannot be undone."
+            />
         </div>
     );
 };
