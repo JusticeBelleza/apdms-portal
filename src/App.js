@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { Bell, AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOut, LayoutDashboard, ChevronDown, ChevronUp, Search, X, FileSpreadsheet, Printer, Settings, PlusCircle, Trash2, Edit, Users, Calendar, HelpCircle, Download, Building, FileClock } from 'lucide-react';
+import { Bell, AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOut, LayoutDashboard, ChevronDown, ChevronUp, Search, X, FileSpreadsheet, Printer, Settings, PlusCircle, Trash2, Edit, Users, Calendar, HelpCircle, Download, Building, FileClock, ShieldCheck } from 'lucide-react';
 import { initializeApp } from "firebase/app";
-import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { getFirestore, collection, getDocs, getDoc, addDoc, setDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, orderBy, writeBatch } from "firebase/firestore";
 
 // --- FIREBASE CONFIGURATION ---
@@ -166,16 +166,18 @@ const LoginScreen = ({ onLogin }) => {
 
 const Sidebar = ({ user, onNavigate, onLogout, currentPage }) => {
     const navItems = [
-        { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, role: ['Facility User', 'PHO Admin', 'Viewer', 'Super Admin', 'Facility Admin'] },
-        { id: 'reports', label: 'Reports', icon: <FileSpreadsheet className="w-5 h-5" />, role: ['PHO Admin', 'Viewer', 'Super Admin', 'Facility Admin'] },
-        { id: 'submissions', label: 'My Submissions', icon: <FileText className="w-5 h-5" />, role: ['Facility User'] },
-        { id: 'users', label: 'Manage Users', icon: <Users className="w-5 h-5" />, role: ['Super Admin', 'Facility Admin'] },
-        { id: 'facilities', label: 'Manage Facilities', icon: <Building className="w-5 h-5" />, role: ['Super Admin'] },
-        { id: 'audit', label: 'Audit Log', icon: <FileClock className="w-5 h-5" />, role: ['Super Admin'] },
-        { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" />, role: ['Super Admin'] },
-        { id: 'profile', label: 'Profile', icon: <User className="w-5 h-5" />, role: ['Facility User', 'PHO Admin', 'Viewer', 'Super Admin', 'Facility Admin'] },
+        { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, permission: true },
+        { id: 'reports', label: 'Reports', icon: <FileSpreadsheet className="w-5 h-5" />, permission: user.permissions?.canExportData },
+        { id: 'submissions', label: 'My Submissions', icon: <FileText className="w-5 h-5" />, permission: user.role === 'Facility User' },
+        { id: 'users', label: 'Manage Users', icon: <Users className="w-5 h-5" />, permission: user.permissions?.canManageUsers },
+        { id: 'facilities', label: 'Manage Facilities', icon: <Building className="w-5 h-5" />, permission: user.permissions?.canManageFacilities },
+        { id: 'audit', label: 'Audit Log', icon: <FileClock className="w-5 h-5" />, permission: user.permissions?.canViewAuditLog },
+        { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" />, permission: user.permissions?.canManagePermissions || user.permissions?.canManagePrograms },
+        { id: 'profile', label: 'Profile', icon: <User className="w-5 h-5" />, permission: true },
     ];
-    const filteredNavItems = navItems.filter(item => item.role.includes(user.role));
+
+    const filteredNavItems = navItems.filter(item => item.permission);
+
     return (
         <>
             {/* Desktop Sidebar */}
@@ -213,7 +215,7 @@ const Header = ({ user, onLogout, unreadCount, onBellClick }) => (
                     <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"></span>
                 )}
             </button>
-            <button onClick={onLogout} className="p-2 rounded-full hover:bg-gray-200"><LogOut className="w-5 h-5 text-gray-600" /></button>
+            <button onClick={onLogout} className="p-2 rounded-full hover:bg-gray-200 md:hidden"><LogOut className="w-5 h-5 text-gray-600" /></button>
         </div>
     </header>
 );
@@ -252,7 +254,69 @@ const FacilityDashboard = ({ user, allPrograms, submissions, setSubmissions, db 
     );
 };
 
-const AdminDashboard = ({ facilities, programs, submissions, users, isViewer = false, onConfirm, userRole, announcements, onAddAnnouncement, onDeleteAnnouncement }) => {
+const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm }) => {
+    const assignedProgramIds = user.assignedPrograms || [];
+    const myPrograms = programs.filter(p => assignedProgramIds.includes(p.id));
+    const myProgramNames = myPrograms.map(p => p.name);
+
+    const myProgramsSubmissions = submissions.filter(s => myProgramNames.includes(s.programName));
+
+    const pendingSubmissions = myProgramsSubmissions.filter(s => {
+        const program = myPrograms.find(p => p.name === s.programName);
+        if (!program) return false;
+        const status = getStatusForProgram(s.facilityName, program, submissions);
+        return status.isActionable;
+    });
+
+    const chartData = myPrograms.map(p => {
+        const facilitiesForProgram = users.filter(u => u.assignedPrograms?.includes(p.id));
+        const submittedCount = submissions.filter(s => s.programName === p.name && s.confirmed).length;
+        return { name: p.name, Submitted: submittedCount, Pending: facilitiesForProgram.length - submittedCount };
+    });
+    
+    return (
+        <div className="space-y-6">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">PHO Admin Dashboard</h1>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold mb-4 text-gray-700">My Programs Compliance</h2>
+                    <div style={{ width: '100%', height: 300 }}>
+                        <BarChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Bar dataKey="Submitted" stackId="a" fill="#14b8a6" />
+                            <Bar dataKey="Pending" stackId="a" fill="#f59e0b" />
+                        </BarChart>
+                    </div>
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold mb-4 text-gray-700">Pending Confirmations</h2>
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {pendingSubmissions.length > 0 ? pendingSubmissions.map(sub => (
+                            <div key={sub.id} className="bg-gray-50 p-3 rounded-md">
+                                <p className="font-semibold">{sub.programName}</p>
+                                <p className="text-sm text-gray-600">From: {sub.facilityName}</p>
+                                <div className="flex justify-between items-center mt-2">
+                                    <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>
+                                    {user.permissions?.canConfirmSubmissions && (
+                                        <button onClick={() => onConfirm(sub.id)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>
+                                    )}
+                                </div>
+                            </div>
+                        )) : (
+                            <p className="text-center text-gray-500 pt-10">No pending submissions for your programs.</p>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const AdminDashboard = ({ facilities, programs, submissions, users, onConfirm, user, announcements, onAddAnnouncement, onDeleteAnnouncement }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedFacility, setExpandedFacility] = useState(null);
     const chartContainerRef = useRef(null);
@@ -315,7 +379,7 @@ const AdminDashboard = ({ facilities, programs, submissions, users, isViewer = f
                                                         <span>{program.name}</span>
                                                         <div className="flex items-center space-x-2">
                                                             {status.isActionable && <a href={status.fileURL} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>}
-                                                            {status.isActionable && !isViewer && <button onClick={() => onConfirm(status.submissionId)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>}
+                                                            {status.isActionable && user.permissions?.canConfirmSubmissions && <button onClick={() => onConfirm(status.submissionId)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>}
                                                             <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span>
                                                         </div>
                                                     </li>
@@ -334,7 +398,7 @@ const AdminDashboard = ({ facilities, programs, submissions, users, isViewer = f
     );
 };
 
-const ReportsPage = ({ programs, submissions, users }) => {
+const ReportsPage = ({ programs, submissions, users, user }) => {
     const [reportType, setReportType] = useState('');
     const [year, setYear] = useState(new Date().getFullYear());
     const [quarter, setQuarter] = useState(1);
@@ -445,10 +509,10 @@ const ReportsPage = ({ programs, submissions, users }) => {
     );
 };
 
-const SettingsPage = ({ programs, userRole, db }) => {
+const SettingsPage = ({ programs, user, db }) => {
     const [showProgramModal, setShowProgramModal] = useState(false);
     const [editingProgram, setEditingProgram] = useState(null);
-    const isSuperAdmin = userRole === 'Super Admin';
+    const canManagePrograms = user.permissions?.canManagePrograms;
 
     const handleAddProgram = () => {
         setEditingProgram(null);
@@ -472,7 +536,7 @@ const SettingsPage = ({ programs, userRole, db }) => {
     };
 
     const handleDeleteProgram = async (programId) => {
-        if (isSuperAdmin && window.confirm('Are you sure you want to delete this program? This cannot be undone.')) {
+        if (window.confirm('Are you sure you want to delete this program? This cannot be undone.')) {
             await deleteDoc(doc(db, "programs", programId));
         }
     };
@@ -480,36 +544,143 @@ const SettingsPage = ({ programs, userRole, db }) => {
     return (
         <div className="space-y-8">
             <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Settings</h1>
-            <div className="bg-white p-6 rounded-lg shadow-md">
-                <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-semibold text-gray-700">Manage Health Programs</h2>
-                    <button onClick={handleAddProgram} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                        <PlusCircle className="w-5 h-5 mr-2"/>
-                        Add Program
-                    </button>
-                </div>
-                <div className="space-y-2">
-                    {programs.map(program => (
-                        <div key={program.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
-                            <div>
-                                <p className="font-semibold">{program.name}</p>
-                                <p className="text-sm text-gray-500">Frequency: {program.frequency} | Type: {program.type}</p>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <button onClick={() => handleEditProgram(program)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full">
-                                    <Edit className="w-5 h-5" />
-                                </button>
-                                {isSuperAdmin && !program.core && (
-                                    <button onClick={() => handleDeleteProgram(program.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full">
-                                        <Trash2 className="w-5 h-5" />
+            
+            {canManagePrograms && (
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-semibold text-gray-700">Manage Health Programs</h2>
+                        <button onClick={handleAddProgram} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                            <PlusCircle className="w-5 h-5 md:mr-2"/>
+                            <span className="hidden md:inline">Add Program</span>
+                        </button>
+                    </div>
+                    <div className="space-y-2">
+                        {programs.map(program => (
+                            <div key={program.id} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
+                                <div>
+                                    <p className="font-semibold">{program.name}</p>
+                                    <p className="text-sm text-gray-500">Frequency: {program.frequency} | Type: {program.type}</p>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <button onClick={() => handleEditProgram(program)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full">
+                                        <Edit className="w-5 h-5" />
                                     </button>
-                                )}
+                                    {!program.core && (
+                                        <button onClick={() => handleDeleteProgram(program.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full">
+                                            <Trash2 className="w-5 h-5" />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
+
+            {user.permissions?.canManagePermissions && <PermissionsManagement db={db} />}
+
             {showProgramModal && <ProgramFormModal program={editingProgram} onClose={() => setShowProgramModal(false)} onSave={handleSaveProgram} />}
+        </div>
+    );
+};
+
+const PermissionsManagement = ({ db }) => {
+    const [permissions, setPermissions] = useState({});
+    const [loading, setLoading] = useState(true);
+
+    const roles = ['PHO Admin', 'Facility Admin', 'Viewer', 'Facility User'];
+    const permissionKeys = [
+        { key: 'canManageUsers', label: 'Manage Users' },
+        { key: 'canManageFacilities', label: 'Manage Facilities' },
+        { key: 'canManagePrograms', label: 'Manage Programs' },
+        { key: 'canManagePermissions', label: 'Manage Permissions' },
+        { key: 'canViewAuditLog', label: 'View Audit Log' },
+        { key: 'canExportData', label: 'Export Data' },
+        { key: 'canConfirmSubmissions', label: 'Confirm Submissions' },
+    ];
+
+    useEffect(() => {
+        const fetchPermissions = async () => {
+            setLoading(true);
+            const perms = {};
+            for (const role of roles) {
+                const docRef = doc(db, "permissions", role);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    perms[role] = docSnap.data();
+                } else {
+                    // Default permissions if not set in DB
+                    perms[role] = permissionKeys.reduce((acc, p) => ({ ...acc, [p.key]: false }), {});
+                }
+            }
+            setPermissions(perms);
+            setLoading(false);
+        };
+        fetchPermissions();
+    }, [db]);
+
+    const handlePermissionChange = (role, permissionKey) => {
+        setPermissions(prev => ({
+            ...prev,
+            [role]: {
+                ...prev[role],
+                [permissionKey]: !prev[role][permissionKey]
+            }
+        }));
+    };
+
+    const handleSavePermissions = async () => {
+        const batch = writeBatch(db);
+        for (const role in permissions) {
+            const docRef = doc(db, "permissions", role);
+            batch.set(docRef, permissions[role]);
+        }
+        await batch.commit();
+        alert('Permissions updated successfully!');
+    };
+
+    if (loading) {
+        return <div className="bg-white p-6 rounded-lg shadow-md">Loading permissions...</div>;
+    }
+
+    return (
+        <div className="bg-white p-6 rounded-lg shadow-md">
+            <h2 className="text-xl font-semibold text-gray-700 mb-4">Role Permissions</h2>
+            <div className="overflow-x-auto">
+                <table className="min-w-full">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                            {permissionKeys.map(p => (
+                                <th key={p.key} className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">{p.label}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                        {roles.map(role => (
+                            <tr key={role}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{role}</td>
+                                {permissionKeys.map(p => (
+                                    <td key={p.key} className="px-6 py-4 whitespace-nowrap text-center">
+                                        <input
+                                            type="checkbox"
+                                            className="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
+                                            checked={permissions[role]?.[p.key] || false}
+                                            onChange={() => handlePermissionChange(role, p.key)}
+                                        />
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            <div className="text-right mt-4">
+                <button onClick={handleSavePermissions} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg">
+                    <ShieldCheck className="w-5 h-5 md:mr-2" />
+                    <span className="hidden md:inline">Save Permissions</span>
+                </button>
+            </div>
         </div>
     );
 };
@@ -588,7 +759,7 @@ const ProgramFormModal = ({ program, onClose, onSave }) => {
     );
 }
 
-const FacilityManagementPage = ({ facilities, db, userRole }) => {
+const FacilityManagementPage = ({ user, facilities, db }) => {
     const [showAddModal, setShowAddModal] = useState(false);
     const [sortConfig, setSortConfig] = useState({ key: null, direction: 'ascending' });
 
@@ -623,10 +794,8 @@ const FacilityManagementPage = ({ facilities, db, userRole }) => {
     };
 
     const handleDeleteFacility = async (facilityId) => {
-        if (userRole === 'Super Admin' && window.confirm('Are you sure you want to delete this facility? All associated users and submissions will be affected.')) {
+        if (window.confirm('Are you sure you want to delete this facility? This will not delete their submissions, but it will remove the facility from the system.')) {
             try {
-                // In a real application, you would also need to delete/update associated users and submissions
-                // For simplicity, this example only deletes the facility document.
                 await deleteDoc(doc(db, "facilities", facilityId));
                 alert('Facility deleted successfully!');
             } catch (error) {
@@ -644,18 +813,18 @@ const FacilityManagementPage = ({ facilities, db, userRole }) => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Manage Facilities</h1>
-                {userRole === 'Super Admin' && (
-                    <div className="flex space-x-2">
+                <div className="flex space-x-2">
+                    {user.permissions?.canExportData && (
                         <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
                             <Download className="w-5 h-5 md:mr-2" />
                             <span className="hidden md:inline">Export to CSV</span>
                         </button>
-                        <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
-                            <PlusCircle className="w-5 h-5 md:mr-2" />
-                            <span className="hidden md:inline">Add Facility</span>
-                        </button>
-                    </div>
-                )}
+                    )}
+                    <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                        <PlusCircle className="w-5 h-5 md:mr-2" />
+                        <span className="hidden md:inline">Add Facility</span>
+                    </button>
+                </div>
             </div>
             <div className="bg-white p-6 rounded-lg shadow-md">
                 <h2 className="text-xl font-semibold mb-4 text-gray-700">Existing Facilities</h2>
@@ -669,7 +838,7 @@ const FacilityManagementPage = ({ facilities, db, userRole }) => {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-900" onClick={() => requestSort('type')}>
                                     <div className="flex items-center">Facility Type {getSortIndicator('type')}</div>
                                 </th>
-                                {userRole === 'Super Admin' && <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>}
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
@@ -677,13 +846,11 @@ const FacilityManagementPage = ({ facilities, db, userRole }) => {
                                 <tr key={facility.id}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{facility.name}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{facility.type}</td>
-                                    {userRole === 'Super Admin' && (
-                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <button onClick={() => handleDeleteFacility(facility.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center">
-                                                <Trash2 className="w-4 h-4" />
-                                            </button>
-                                        </td>
-                                    )}
+                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                        <button onClick={() => handleDeleteFacility(facility.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center">
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -757,17 +924,17 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     const [showAddFacilityAdminModal, setShowAddFacilityAdminModal] = useState(false);
     const [expandedFacility, setExpandedFacility] = useState(null);
 
-
     const isSuperAdmin = currentUser.role === 'Super Admin';
+    const isPhoAdmin = currentUser.role === 'PHO Admin';
     const isFacilityAdmin = currentUser.role === 'Facility Admin';
-    
-    const phoUsers = [...users]
+
+    const phoUsers = users
         .filter(u => u.facilityName === 'Provincial Health Office' && u.role !== 'Super Admin')
         .sort((a,b) => a.name.localeCompare(b.name));
 
-    const facilityUsers = [...users]
+    const facilityUsersByFacility = users
         .filter(u => u.facilityName !== 'Provincial Health Office')
-        .sort((a,b) => a.facilityName.localeCompare(b.facilityName) || a.name.localeCompare(b.name)) // Sort by facility name, then user name
+        .sort((a,b) => a.facilityName.localeCompare(b.facilityName) || a.name.localeCompare(b.name))
         .reduce((acc, user) => {
             const { facilityName } = user;
             if (!acc[facilityName]) {
@@ -776,11 +943,15 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
             acc[facilityName].push(user);
             return acc;
         }, {});
+    
+    const facilitiesToDisplay = isFacilityAdmin 
+        ? Object.keys(facilityUsersByFacility).filter(name => name === currentUser.facilityName)
+        : Object.keys(facilityUsersByFacility).sort();
 
 
     const handleAddUser = async (newUser) => {
         try {
-            const tempAuth = getAuth(initializeApp(firebaseConfig, 'secondary'));
+            const tempAuth = getAuth(initializeApp(firebaseConfig, `secondary-auth-${Date.now()}`));
             const userCredential = await createUserWithEmailAndPassword(tempAuth, newUser.email, newUser.password);
             const user = userCredential.user;
             await setDoc(doc(db, "users", user.uid), {
@@ -814,7 +985,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     };
 
     const handleDeleteUser = async (userId) => {
-        if (window.confirm('Are you sure you want to delete this user? This is a permanent action.')) {
+        if (window.confirm('Are you sure you want to delete this user? This will not delete their submissions, but the user will be permanently removed.')) {
             await deleteDoc(doc(db, "users", userId));
             await logAudit(db, currentUser, "Delete User", { targetUserId: userId });
         }
@@ -830,6 +1001,13 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
         const dataToExport = users.map(({ password, ...rest }) => rest);
         exportToCSV(dataToExport, "users");
     };
+
+    const canEditOrDelete = (targetUser) => {
+        if (isSuperAdmin) return targetUser.id !== currentUser.id;
+        if (isPhoAdmin) return targetUser.role === 'Facility Admin' || targetUser.role === 'Facility User';
+        if (isFacilityAdmin) return targetUser.role === 'Facility User' && targetUser.facilityName === currentUser.facilityName;
+        return false;
+    }
 
     const UserRow = ({user}) => (
         <div className="flex flex-col md:flex-row md:items-center justify-between py-3 px-4">
@@ -855,10 +1033,8 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
                         </div>
                     </label>
                 )}
-                <button onClick={() => openEditModal(user)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Edit className="w-4 h-4"/></button>
-                {user.id !== currentUser.id && (isSuperAdmin || isFacilityAdmin) && (
-                    <button onClick={() => handleDeleteUser(user.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Trash2 className="w-4 h-4"/></button>
-                )}
+                {canEditOrDelete(user) && <button onClick={() => openEditModal(user)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Edit className="w-4 h-4"/></button>}
+                {canEditOrDelete(user) && <button onClick={() => handleDeleteUser(user.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Trash2 className="w-4 h-4"/></button>}
             </div>
         </div>
     );
@@ -868,33 +1044,39 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
             <div className="flex justify-between items-center">
                 <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Manage Users</h1>
                 <div className="flex space-x-2">
-                    {isSuperAdmin && (
+                    {currentUser.permissions?.canExportData && (
                         <button onClick={handleExport} className="inline-flex items-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
                             <Download className="w-5 h-5 md:mr-2" />
                             <span className="hidden md:inline">Export Users</span>
                         </button>
                     )}
-                    {isSuperAdmin && (
+                    {(isSuperAdmin || isPhoAdmin) && (
                         <button onClick={() => setShowAddFacilityAdminModal(true)} className="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
                             <Building className="w-5 h-5 md:mr-2"/>
                             <span className="hidden md:inline">Add Facility Admin</span>
                         </button>
                     )}
-                    <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
-                        <PlusCircle className="w-5 h-5 md:mr-2"/>
-                        <span className="hidden md:inline">Add User</span>
-                    </button>
+                    {(isSuperAdmin || isFacilityAdmin) && (
+                        <button onClick={() => setShowAddModal(true)} className="inline-flex items-center bg-primary hover:bg-secondary text-white font-bold py-2 px-3 md:px-4 rounded-lg transition duration-300">
+                            <PlusCircle className="w-5 h-5 md:mr-2"/>
+                            <span className="hidden md:inline">Add User</span>
+                        </button>
+                    )}
                 </div>
             </div>
             <div className="bg-white p-6 rounded-lg shadow-md">
-                <h3 className="text-lg font-semibold text-gray-800 mb-2">PHO Accounts</h3>
-                <div className="divide-y divide-gray-200 border rounded-lg">
-                    {phoUsers.map(user => <UserRow key={user.id} user={user} />)}
-                </div>
+                {isSuperAdmin && (
+                    <>
+                        <h3 className="text-lg font-semibold text-gray-800 mb-2">PHO Accounts</h3>
+                        <div className="divide-y divide-gray-200 border rounded-lg">
+                            {phoUsers.map(user => <UserRow key={user.id} user={user} />)}
+                        </div>
+                    </>
+                )}
 
                 <h3 className="text-lg font-semibold text-gray-800 mt-6 mb-2">Facility Accounts</h3>
                 <div className="space-y-2">
-                    {Object.keys(facilityUsers).sort().map(facilityName => (
+                    {facilitiesToDisplay.map(facilityName => (
                         <div key={facilityName} className="border rounded-lg">
                             <button onClick={() => setExpandedFacility(expandedFacility === facilityName ? null : facilityName)} className="w-full flex justify-between items-center p-4 text-left hover:bg-gray-50">
                                 <span className="font-medium text-gray-800">{facilityName}</span>
@@ -902,7 +1084,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
                             </button>
                             {expandedFacility === facilityName && (
                                 <div className="p-4 border-t bg-gray-50 divide-y divide-gray-200">
-                                    {facilityUsers[facilityName].map(user => <UserRow key={user.id} user={user} />)}
+                                    {facilityUsersByFacility[facilityName].map(user => <UserRow key={user.id} user={user} />)}
                                 </div>
                             )}
                         </div>
@@ -933,21 +1115,58 @@ const SubmissionsHistory = ({ user, submissions, setSubmissions, db }) => {
 
 const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, currentUser, auth, db }) => {
     const isSuperAdmin = currentUser.role === 'Super Admin';
+    const isPhoAdmin = currentUser.role === 'PHO Admin';
+    const isFacilityAdmin = currentUser.role === 'Facility Admin';
 
-    const [formData, setFormData] = useState({
-        id: user?.id || null,
-        name: user?.name || '',
-        email: user?.email || '',
-        password: '',
-        confirmPassword: '',
-        facilityName: isSuperAdmin ? "Provincial Health Office" : currentUser.facilityName,
-        role: user?.role || (isSuperAdmin ? 'PHO Admin' : 'Facility User'),
-        assignedPrograms: user?.assignedPrograms || []
-    });
+    const getInitialFormData = () => {
+        if (user) { // Editing existing user
+            return {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                password: '',
+                confirmPassword: '',
+                facilityName: user.facilityName,
+                role: user.role,
+                assignedPrograms: user.assignedPrograms || []
+            };
+        } else { // Adding new user
+            let initialRole = 'Facility User';
+            let initialFacility = '';
+            if (isSuperAdmin) {
+                initialRole = 'PHO Admin';
+                initialFacility = 'Provincial Health Office';
+            } else if (isFacilityAdmin) {
+                initialFacility = currentUser.facilityName;
+            }
+            return {
+                id: null,
+                name: '',
+                email: '',
+                password: '',
+                confirmPassword: '',
+                facilityName: initialFacility,
+                role: initialRole,
+                assignedPrograms: []
+            };
+        }
+    };
+
+    const [formData, setFormData] = useState(getInitialFormData());
 
     const handleChange = (e) => {
         const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value }));
+        
+        if (name === 'role') {
+            const isPhoRole = value === 'PHO Admin' || value === 'Viewer';
+            setFormData(prev => ({
+                ...prev,
+                [name]: value,
+                facilityName: isPhoRole ? 'Provincial Health Office' : ''
+            }));
+        } else {
+            setFormData(prev => ({ ...prev, [name]: value }));
+        }
     };
 
     const handleToggleProgram = (programId) => {
@@ -971,8 +1190,35 @@ const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, cur
             alert('Password field cannot be empty for new users.');
             return;
         }
-        onSave(formData)
+        onSave(formData);
     };
+
+    const renderRoleOptions = () => {
+        if (isSuperAdmin) {
+            return (
+                <>
+                    <option>PHO Admin</option>
+                    <option>Viewer</option>
+                    <option>Facility Admin</option>
+                    <option>Facility User</option>
+                </>
+            );
+        }
+        if (isPhoAdmin) {
+             return (
+                <>
+                    <option>Facility Admin</option>
+                    <option>Facility User</option>
+                </>
+            );
+        }
+        if (isFacilityAdmin) {
+            return <option>Facility User</option>;
+        }
+        return null;
+    };
+    
+    const isFacilityRole = formData.role === 'Facility Admin' || formData.role === 'Facility User';
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -986,7 +1232,7 @@ const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, cur
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Email</label>
-                        <input type="email" name="email" value={formData.email} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        <input type="email" name="email" value={formData.email} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required disabled={!!user} />
                     </div>
                      <div>
                         <label className="block text-sm font-medium text-gray-700">Password</label>
@@ -996,38 +1242,51 @@ const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, cur
                         <label className="block text-sm font-medium text-gray-700">Confirm Password</label>
                         <input type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" placeholder="Confirm password" required={!user || formData.password} />
                     </div>
-                    {currentUser.role === 'Facility Admin' && (
-                         <div>
-                            <label className="block text-sm font-medium text-gray-700">Facility</label>
-                            <input type="text" name="facilityName" value={formData.facilityName} disabled className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm bg-gray-100" />
-                        </div>
-                    )}
+                    
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Role</label>
-                        <select name="role" value={formData.role} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
-                            {isSuperAdmin ? <>
-                                <option>PHO Admin</option>
-                                <option>Viewer</option>
-                            </> : <option>Facility User</option>}
+                        <select name="role" value={formData.role} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" disabled={!!user && !isSuperAdmin}>
+                            {renderRoleOptions()}
                         </select>
                     </div>
-                    <div className="border-t pt-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Assigned Health Programs</label>
-                        <div className="space-y-2">
-                            {programs.map(program => (
-                                <div key={program.id} className="flex items-center justify-between">
-                                    <span>{program.name}</span>
-                                    <label htmlFor={`user-toggle-${program.id}`} className="flex items-center cursor-pointer">
-                                        <div className="relative">
-                                            <input type="checkbox" id={`user-toggle-${program.id}`} className="sr-only" checked={formData.assignedPrograms.includes(program.id)} onChange={() => handleToggleProgram(program.id)} />
-                                            <div className={`block w-12 h-6 rounded-full ${formData.assignedPrograms.includes(program.id) ? 'bg-blue-500' : 'bg-red-500'}`}></div>
-                                            <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ease-in-out ${formData.assignedPrograms.includes(program.id) ? 'transform translate-x-6' : ''}`}></div>
-                                        </div>
-                                    </label>
-                                </div>
-                            ))}
+
+                    {isFacilityRole && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Facility</label>
+                            <select 
+                                name="facilityName" 
+                                value={formData.facilityName} 
+                                onChange={handleChange} 
+                                className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" 
+                                disabled={isFacilityAdmin || (!!user && !isSuperAdmin)}
+                            >
+                                <option value="">Select a Facility</option>
+                                {facilities.filter(f => f.name !== 'Provincial Health Office').map(f => (
+                                    <option key={f.id} value={f.name}>{f.name}</option>
+                                ))}
+                            </select>
                         </div>
-                    </div>
+                    )}
+
+                    {(isSuperAdmin || (isFacilityAdmin && user?.role === 'Facility User')) && (
+                         <div className="border-t pt-4">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Assigned Health Programs</label>
+                            <div className="space-y-2 max-h-40 overflow-y-auto">
+                                {programs.map(program => (
+                                    <div key={program.id} className="flex items-center justify-between">
+                                        <span>{program.name}</span>
+                                        <label htmlFor={`user-toggle-${program.id}`} className="flex items-center cursor-pointer">
+                                            <div className="relative">
+                                                <input type="checkbox" id={`user-toggle-${program.id}`} className="sr-only" checked={formData.assignedPrograms.includes(program.id)} onChange={() => handleToggleProgram(program.id)} />
+                                                <div className={`block w-12 h-6 rounded-full ${formData.assignedPrograms.includes(program.id) ? 'bg-blue-500' : 'bg-red-500'}`}></div>
+                                                <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ease-in-out ${formData.assignedPrograms.includes(program.id) ? 'transform translate-x-6' : ''}`}></div>
+                                            </div>
+                                        </label>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                     <div className="mt-6 flex justify-end space-x-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
                         <button type="submit" className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary">Save User</button>
@@ -1136,9 +1395,123 @@ const AddFacilityAdminModal = ({ onClose, auth, db, facilities }) => {
 };
 
 
-const Profile = ({ user }) => (
-    <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">User Profile</h1><div className="bg-white p-8 rounded-lg shadow-md max-w-lg"><div className="space-y-4"><div><label className="block text-sm font-medium text-gray-500">Full Name</label><p className="text-lg text-gray-800">{user.name}</p></div><div><label className="block text-sm font-medium text-gray-500">Email Address</label><p className="text-lg text-gray-800">{user.email}</p></div><div><label className="block text-sm font-medium text-gray-500">Assigned Facility</label><p className="text-lg text-gray-800">{user.facilityName}</p></div><div><label className="block text-sm font-medium text-gray-500">Role</label><p className="text-lg text-gray-800">{user.role}</p></div></div><button className="mt-6 w-full bg-primary hover:bg-secondary text-white font-bold py-2 px-4 rounded-lg transition duration-300">Edit Profile (Not Implemented)</button></div></div>
-);
+const ProfilePage = ({ user, auth, db, setUser }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [name, setName] = useState(user.name);
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+    const handleSaveProfile = async (e) => {
+        e.preventDefault();
+        const userDocRef = doc(db, "users", user.uid);
+        try {
+            await setDoc(userDocRef, { name: name }, { merge: true });
+            setUser(prevUser => ({ ...prevUser, name }));
+            alert("Profile updated successfully!");
+            setIsEditing(false);
+        } catch (error) {
+            alert(`Failed to update profile: ${error.message}`);
+        }
+    };
+
+    const handleChangePassword = async (e) => {
+        e.preventDefault();
+        if (newPassword !== confirmNewPassword) {
+            alert("New passwords do not match.");
+            return;
+        }
+        if (!currentPassword || !newPassword) {
+            alert("All password fields are required.");
+            return;
+        }
+
+        const firebaseUser = auth.currentUser;
+        if (!firebaseUser) {
+            alert("No user is currently signed in.");
+            return;
+        }
+
+        const credential = EmailAuthProvider.credential(firebaseUser.email, currentPassword);
+
+        try {
+            await reauthenticateWithCredential(firebaseUser, credential);
+            await updatePassword(firebaseUser, newPassword);
+            alert("Password updated successfully!");
+            setCurrentPassword('');
+            setNewPassword('');
+            setConfirmNewPassword('');
+        } catch (error) {
+            alert(`Failed to update password: ${error.message}`);
+        }
+    };
+
+    return (
+        <div className="space-y-8">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">User Profile</h1>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-semibold text-gray-700">Your Information</h2>
+                        {!isEditing && (
+                            <button onClick={() => setIsEditing(true)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full">
+                                <Edit className="w-5 h-5" />
+                            </button>
+                        )}
+                    </div>
+                    <form onSubmit={handleSaveProfile} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-500">Full Name</label>
+                            {isEditing ? (
+                                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" />
+                            ) : (
+                                <p className="text-lg text-gray-800">{user.name}</p>
+                            )}
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-500">Email Address</label>
+                            <p className="text-lg text-gray-800">{user.email}</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-500">Assigned Facility</label>
+                            <p className="text-lg text-gray-800">{user.facilityName}</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-500">Role</label>
+                            <p className="text-lg text-gray-800">{user.role}</p>
+                        </div>
+                        {isEditing && (
+                            <div className="flex justify-end space-x-2 pt-2">
+                                <button type="button" onClick={() => { setIsEditing(false); setName(user.name); }} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
+                                <button type="submit" className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary">Save</button>
+                            </div>
+                        )}
+                    </form>
+                </div>
+                <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold text-gray-700 mb-4">Change Password</h2>
+                    <form onSubmit={handleChangePassword} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Current Password</label>
+                            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">New Password</label>
+                            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Confirm New Password</label>
+                            <input type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        </div>
+                        <div className="text-right">
+                            <button type="submit" className="px-6 py-2 bg-primary text-white rounded-lg hover:bg-secondary">Update Password</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const UploadModal = ({ program, onClose, onFileUpload }) => {
     const [file, setFile] = useState(null);
@@ -1221,6 +1594,7 @@ const AnnouncementModal = ({ onClose, onSave, announcements, userRole, onDelete 
 
 const AuditLogPage = ({ db }) => {
     const [logs, setLogs] = useState([]);
+    const [searchTerm, setSearchTerm] = useState('');
 
     useEffect(() => {
         const q = query(collection(db, "audit_logs"), orderBy("timestamp", "desc"));
@@ -1229,11 +1603,27 @@ const AuditLogPage = ({ db }) => {
         });
         return () => unsubscribe();
     }, [db]);
+    
+    const filteredLogs = logs.filter(log =>
+        Object.values(log).some(value =>
+            String(value).toLowerCase().includes(searchTerm.toLowerCase())
+        )
+    );
 
     return (
         <div className="space-y-6">
             <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Audit Log</h1>
             <div className="bg-white p-6 rounded-lg shadow-md">
+                 <div className="relative mb-4">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input
+                        type="text"
+                        placeholder="Search logs..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                </div>
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
@@ -1246,7 +1636,7 @@ const AuditLogPage = ({ db }) => {
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {logs.map(log => (
+                            {filteredLogs.map(log => (
                                 <tr key={log.id}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(log.timestamp?.toDate()).toLocaleString()}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{log.userName}</td>
@@ -1284,16 +1674,30 @@ export default function App() {
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
                 const userDocRef = doc(db, "users", firebaseUser.uid);
-                const docSnap = await getDoc(userDocRef);
+                const userDocSnap = await getDoc(userDocRef);
 
-                if (docSnap.exists()) {
-                     const userData = docSnap.data();
+                if (userDocSnap.exists()) {
+                     const userData = userDocSnap.data();
                      if (userData.isActive === false) {
                          alert("Your account has been deactivated. Please contact an administrator.");
                          signOut(auth);
-                     } else {
-                         setUser({ uid: firebaseUser.uid, ...userData });
+                         return;
                      }
+
+                     const permsDocRef = doc(db, "permissions", userData.role);
+                     const permsDocSnap = await getDoc(permsDocRef);
+                     
+                     let permissions = {};
+                     if (permsDocSnap.exists()) {
+                         permissions = permsDocSnap.data();
+                     }
+                     // Super Admins always have all permissions
+                     if (userData.role === 'Super Admin') {
+                        permissions = { canManageUsers: true, canManageFacilities: true, canManagePrograms: true, canManagePermissions: true, canViewAuditLog: true, canExportData: true, canConfirmSubmissions: true };
+                     }
+
+                     setUser({ uid: firebaseUser.uid, ...userData, permissions });
+
                 } else {
                     console.error("No user document found in Firestore for this authenticated user. Signing out.");
                     signOut(auth);
@@ -1359,8 +1763,8 @@ export default function App() {
         signInWithEmailAndPassword(auth, email, password)
             .catch((error) => {
                 alert(error.message);
-            })
-            .finally(() => setLoading(false));
+                setLoading(false);
+            });
     };
 
     const handleLogout = () => {
@@ -1408,22 +1812,45 @@ export default function App() {
         ? activePrograms.filter(p => loggedInUserDetails.assignedPrograms.includes(p.id))
         : activePrograms;
 
+    const renderPage = () => {
+        switch(page) {
+            case 'dashboard':
+                if (user.role === 'Facility User') return <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
+                if (user.role === 'PHO Admin') return <PhoAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} />;
+                return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={user} announcements={announcements} onAddAnnouncement={() => setShowAnnouncementsModal(true)} onDeleteAnnouncement={handleDeleteAnnouncement} />;
+            case 'reports':
+                if (user.permissions?.canExportData) return <ReportsPage programs={programsForUser} submissions={submissions} users={users} user={user} />;
+                break;
+            case 'facilities':
+                if (user.permissions?.canManageFacilities) return <FacilityManagementPage user={user} facilities={facilities} db={db} />;
+                break;
+            case 'settings':
+                if (user.permissions?.canManagePrograms || user.permissions?.canManagePermissions) return <SettingsPage programs={programs} user={user} db={db} />;
+                break;
+            case 'users':
+                if (user.permissions?.canManageUsers) return <UserManagementPage users={users} setUsers={setUsers} facilities={facilities} programs={programs} currentUser={user} auth={auth} db={db} />;
+                break;
+            case 'submissions':
+                 return <SubmissionsHistory user={user} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
+            case 'profile':
+                return <ProfilePage user={user} auth={auth} db={db} setUser={setUser} />;
+            case 'audit':
+                if (user.permissions?.canViewAuditLog) return <AuditLogPage db={db} />;
+                break;
+            default:
+                return <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
+        }
+        return <div className="p-6"><h1 className="text-2xl font-bold text-red-600">Access Denied</h1><p>You do not have permission to view this page.</p></div>;
+    };
+
+
     return (
         <div className="flex h-screen bg-background font-sans">
             <Sidebar user={user} onNavigate={setPage} onLogout={handleLogout} currentPage={page} />
             <main className="flex-1 flex flex-col overflow-hidden">
                 <Header user={user} onLogout={handleLogout} unreadCount={unreadAnnouncements} onBellClick={handleBellClick} />
                 <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                    {page === 'dashboard' && user.role === 'Facility User' && <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />}
-                    {page === 'dashboard' && (user.role === 'PHO Admin' || user.role === 'Super Admin' || user.role === 'Facility Admin') && <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} userRole={user.role} announcements={announcements} onAddAnnouncement={() => setShowAnnouncementsModal(true)} onDeleteAnnouncement={handleDeleteAnnouncement} />}
-                    {page === 'dashboard' && user.role === 'Viewer' && <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} isViewer={true} announcements={announcements} />}
-                    {page === 'reports' && (user.role === 'PHO Admin' || user.role === 'Viewer' || user.role === 'Super Admin' || user.role === 'Facility Admin') && <ReportsPage programs={programsForUser} submissions={submissions} users={users} />}
-                    {page === 'facilities' && user.role === 'Super Admin' && <FacilityManagementPage facilities={facilities} db={db} userRole={user.role} />}
-                    {page === 'settings' && user.role === 'Super Admin' && <SettingsPage programs={programs} userRole={user.role} db={db} />}
-                    {page === 'users' && (user.role === 'Super Admin' || user.role === 'Facility Admin') && <UserManagementPage users={users} setUsers={setUsers} facilities={facilities} programs={programs} currentUser={loggedInUserDetails} auth={auth} db={db} />}
-                    {page === 'submissions' && <SubmissionsHistory user={user} submissions={submissions} setSubmissions={setSubmissions} db={db} />}
-                    {page === 'profile' && <Profile user={user} />}
-                    {page === 'audit' && user.role === 'Super Admin' && <AuditLogPage db={db} />}
+                    {renderPage()}
                     <div className="h-20 md:hidden" />
                 </div>
             </main>
