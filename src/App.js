@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { Bell, AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOut, LayoutDashboard, ChevronDown, ChevronUp, Search, X, FileSpreadsheet, Printer, Settings, PlusCircle, Trash2, Edit, Users, Calendar, HelpCircle, Download, Building, FileClock, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } from 'recharts';
+import { Bell, AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOut, LayoutDashboard, ChevronDown, ChevronUp, Search, X, FileSpreadsheet, Printer, Settings, PlusCircle, Trash2, Edit, Users, Calendar, HelpCircle, Download, Building, FileClock, ShieldCheck, Database, Check, Ban } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
-import { getFirestore, collection, getDocs, getDoc, addDoc, setDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, orderBy, writeBatch } from "firebase/firestore";
+import { getFirestore, collection, getDocs, getDoc, addDoc, setDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, orderBy, writeBatch, updateDoc } from "firebase/firestore";
+import { getDatabase, ref, onValue, off, set, onDisconnect } from "firebase/database";
+
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -13,7 +15,8 @@ const firebaseConfig = {
   storageBucket: process.env.REACT_APP_STORAGE_BUCKET,
   messagingSenderId: process.env.REACT_APP_MESSAGING_SENDER_ID,
   appId: process.env.REACT_APP_APP_ID,
-  measurementId: process.env.REACT_APP_MEASUREMENT_ID
+  measurementId: process.env.REACT_APP_MEASUREMENT_ID,
+  databaseURL: process.env.REACT_APP_DATABASE_URL,
 };
 
 if (!firebaseConfig.apiKey) {
@@ -22,6 +25,7 @@ if (!firebaseConfig.apiKey) {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
+const rtdb = getDatabase(app);
 
 
 // --- HELPER FUNCTIONS ---
@@ -31,6 +35,10 @@ const getStatusForProgram = (facilityName, program, submissions) => {
         .sort((a, b) => new Date(b.submissionDate) - new Date(a.submissionDate))[0];
 
     if (!lastSubmission) return { text: 'Pending', style: 'bg-yellow-100 text-yellow-800 border border-yellow-300', icon: <Clock className="w-4 h-4" />, isActionable: false };
+    
+    if (lastSubmission.status === 'Rejected') {
+        return { text: 'Rejected', style: 'bg-red-100 text-red-800 border border-red-300', icon: <Ban className="w-4 h-4" />, isActionable: false };
+    }
 
     if (!lastSubmission.confirmed) {
         return { text: 'Pending Confirmation', style: 'bg-orange-100 text-orange-800 border border-orange-300', icon: <HelpCircle className="w-4 h-4" />, isActionable: true, submissionId: lastSubmission.id, fileURL: lastSubmission.fileURL };
@@ -53,6 +61,22 @@ const getStatusForProgram = (facilityName, program, submissions) => {
     } else {
         return { text: 'Overdue', style: 'bg-red-100 text-red-800 border border-red-300', icon: <AlertTriangle className="w-4 h-4" />, isActionable: false };
     }
+};
+
+const getOverallFacilityStatus = (facilityName, programs, submissions, users) => {
+    const facilityUser = users.find(u => u.facilityName === facilityName);
+    if (!facilityUser) return { text: 'No User', style: 'bg-gray-100 text-gray-800' };
+
+    const assignedPrograms = programs.filter(p => facilityUser.assignedPrograms?.includes(p.id));
+    if (assignedPrograms.length === 0) return { text: 'N/A', style: 'bg-gray-100 text-gray-800' };
+
+    const statuses = assignedPrograms.map(p => getStatusForProgram(facilityName, p, submissions).text);
+
+    if (statuses.includes('Overdue')) return { text: 'Overdue', style: 'bg-red-100 text-red-800' };
+    if (statuses.includes('Pending') || statuses.includes('Pending Confirmation')) return { text: 'Pending', style: 'bg-yellow-100 text-yellow-800' };
+    if (statuses.every(s => s === 'Submitted')) return { text: 'Submitted', style: 'bg-green-100 text-green-800' };
+
+    return { text: 'Pending', style: 'bg-yellow-100 text-yellow-800' };
 };
 
 const getMorbidityWeek = (d = new Date()) => {
@@ -167,6 +191,7 @@ const LoginScreen = ({ onLogin }) => {
 const Sidebar = ({ user, onNavigate, onLogout, currentPage }) => {
     const navItems = [
         { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" />, permission: true },
+        { id: 'databank', label: 'Databank', icon: <Database className="w-5 h-5" />, permission: true },
         { id: 'reports', label: 'Reports', icon: <FileSpreadsheet className="w-5 h-5" />, permission: user.permissions?.canExportData },
         { id: 'submissions', label: 'My Submissions', icon: <FileText className="w-5 h-5" />, permission: user.role === 'Facility User' },
         { id: 'users', label: 'Manage Users', icon: <Users className="w-5 h-5" />, permission: user.permissions?.canManageUsers },
@@ -254,7 +279,7 @@ const FacilityDashboard = ({ user, allPrograms, submissions, setSubmissions, db 
     );
 };
 
-const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm }) => {
+const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDeny }) => {
     const assignedProgramIds = user.assignedPrograms || [];
     const myPrograms = programs.filter(p => assignedProgramIds.includes(p.id));
     const myProgramNames = myPrograms.map(p => p.name);
@@ -300,10 +325,13 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm }) =>
                                 <p className="font-semibold">{sub.programName}</p>
                                 <p className="text-sm text-gray-600">From: {sub.facilityName}</p>
                                 <div className="flex justify-between items-center mt-2">
-                                    <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>
-                                    {user.permissions?.canConfirmSubmissions && (
-                                        <button onClick={() => onConfirm(sub.id)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>
-                                    )}
+                                    <a href={sub.fileURL} download target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Download className="w-5 h-5"/></a>
+                                    <div className="flex space-x-2">
+                                        <button onClick={() => onDeny(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Ban className="w-5 h-5"/></button>
+                                        {user.permissions?.canConfirmSubmissions && (
+                                            <button onClick={() => onConfirm(sub.id)} className="p-2 text-green-600 hover:bg-green-100 rounded-full"><Check className="w-5 h-5"/></button>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )) : (
@@ -316,11 +344,113 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm }) =>
     );
 };
 
-const AdminDashboard = ({ facilities, programs, submissions, users, onConfirm, user, announcements, onAddAnnouncement, onDeleteAnnouncement }) => {
+const FacilityAdminDashboard = ({ user, programs, submissions, users, onlineStatuses }) => {
+    const facilityName = user.facilityName;
+    const facilityUsers = users.filter(u => u.facilityName === facilityName && u.role === 'Facility User');
+    const assignedProgramIds = [...new Set(facilityUsers.flatMap(u => u.assignedPrograms || []))];
+    const facilityPrograms = programs.filter(p => assignedProgramIds.includes(p.id));
+
+    const complianceData = facilityPrograms.map(p => {
+        const status = getStatusForProgram(facilityName, p, submissions).text;
+        return { name: p.name, status };
+    });
+
+    const statusCounts = complianceData.reduce((acc, curr) => {
+        acc[curr.status] = (acc[curr.status] || 0) + 1;
+        return acc;
+    }, {});
+
+    const pieData = [
+        { name: 'Submitted', value: statusCounts['Submitted'] || 0 },
+        { name: 'Pending', value: (statusCounts['Pending'] || 0) + (statusCounts['Pending Confirmation'] || 0) },
+        { name: 'Overdue', value: statusCounts['Overdue'] || 0 },
+    ];
+
+    const COLORS = {
+        Submitted: '#10b981',
+        Pending: '#f59e0b',
+        Overdue: '#ef4444',
+    };
+
+    return (
+        <div className="space-y-6">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">{facilityName} Dashboard</h1>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Compliance</h2>
+                    <div style={{ width: '100%', height: 250 }}>
+                        <PieChart>
+                            <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+                                {pieData.map((entry, index) => (
+                                    <Cell key={`cell-${index}`} fill={COLORS[entry.name]} />
+                                ))}
+                            </Pie>
+                            <Tooltip />
+                            <Legend />
+                        </PieChart>
+                    </div>
+                </div>
+                <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold mb-4 text-gray-700">User Status</h2>
+                    <div className="space-y-3 max-h-80 overflow-y-auto">
+                        {facilityUsers.map(u => (
+                            <div key={u.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-md">
+                                <p className="font-medium">{u.name}</p>
+                                <div className="flex items-center space-x-2">
+                                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${u.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                        {u.isActive ? 'Active' : 'Inactive'}
+                                    </span>
+                                    <span className={`h-3 w-3 rounded-full ${onlineStatuses[u.id] ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+             <div className="bg-white p-6 rounded-lg shadow-md">
+                <h2 className="text-xl font-semibold mb-4 text-gray-700">Recent Submissions</h2>
+                 <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {submissions.filter(s => s.facilityName === facilityName).slice(0, 5).map(s => {
+                                const program = programs.find(p => p.name === s.programName);
+                                const status = getStatusForProgram(facilityName, program, submissions);
+                                return (
+                                <tr key={s.id}>
+                                    <td className="px-6 py-4 whitespace-nowrap">{s.programName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{s.uploaderName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{s.submissionDate}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">
+                                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>
+                                            {status.icon}
+                                            <span className="ml-1.5">{status.text}</span>
+                                        </span>
+                                    </td>
+                                </tr>
+                            )})}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const AdminDashboard = ({ facilities, programs, submissions, users, onConfirm, user, announcements, onAddAnnouncement, onDeleteAnnouncement, onApproveDeletion, onDenyDeletion, onNavigate }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedFacility, setExpandedFacility] = useState(null);
     const chartContainerRef = useRef(null);
     const [chartWidth, setChartWidth] = useState(0);
+
+    const deletionRequests = submissions.filter(s => s.deletionRequest);
 
     useEffect(() => {
         const handleResize = () => { if (chartContainerRef.current) { setChartWidth(chartContainerRef.current.offsetWidth); } };
@@ -356,45 +486,63 @@ const AdminDashboard = ({ facilities, programs, submissions, users, onConfirm, u
     });
 
     return (
-        <div className="space-y-6"><h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Provincial Compliance Dashboard</h1>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-teal-100"><CheckCircle2 className="w-6 h-6 text-primary" /></div><div className="ml-4"><p className="text-sm text-gray-500">Compliance Rate</p><p className="text-2xl font-bold text-gray-800">{complianceRate}%</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-green-100"><FileText className="w-6 h-6 text-green-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Submitted</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalSubmitted}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-yellow-100"><Clock className="w-6 h-6 text-yellow-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Pending/Overdue</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalPending}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-blue-100"><User className="w-6 h-6 text-blue-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Reporting Facilities</p><p className="text-2xl font-bold text-gray-800">{facilities.length}</p></div></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Compliance by Program</h2><div ref={chartContainerRef} style={{ width: '100%', height: 300 }}><BarChart width={chartWidth} height={300} data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Legend /><Bar dataKey="Submitted" stackId="a" fill="#14b8a6" /><Bar dataKey="Pending" stackId="a" fill="#f59e0b" /></BarChart></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Submission Status</h2><div className="relative mb-4"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" /><input type="text" placeholder="Search for a facility..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"/></div>
-        <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-            {Object.keys(facilitiesByType).sort().map(type => (
-                <div key={type}>
-                    <h3 className="text-sm font-semibold italic text-gray-500 mb-2">{type}</h3>
-                    <div className="space-y-2">
-                        {facilitiesByType[type].filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase())).map(facility => (
-                            <div key={facility.id} className="border rounded-lg">
-                                <button onClick={() => setExpandedFacility(expandedFacility === facility.name ? null : facility.name)} className="w-full flex justify-between items-center p-4 text-left">
-                                    <span className="font-medium text-gray-800">{facility.name}</span>
-                                    {expandedFacility === facility.name ? <ChevronUp /> : <ChevronDown />}
-                                </button>
-                                {expandedFacility === facility.name && (
-                                    <div className="p-4 border-t bg-gray-50">
-                                        <ul className="space-y-2">
-                                            {programs.filter(p => (users.find(u => u.facilityName === facility.name)?.assignedPrograms || []).includes(p.id)).map(program => {
-                                                const status = getStatusForProgram(facility.name, program, submissions);
-                                                return (
-                                                    <li key={program.id} className={`flex justify-between items-center text-sm p-2 rounded-md ${status.text === 'Overdue' ? 'bg-red-50' : ''}`}>
-                                                        <span>{program.name}</span>
-                                                        <div className="flex items-center space-x-2">
-                                                            {status.isActionable && <a href={status.fileURL} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>}
-                                                            {status.isActionable && user.permissions?.canConfirmSubmissions && <button onClick={() => onConfirm(status.submissionId)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>}
-                                                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span>
-                                                        </div>
-                                                    </li>
-                                                );
-                                            })}
-                                        </ul>
-                                    </div>
-                                )}
-                            </div>
-                        ))}
+        <div className="space-y-6">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Provincial Compliance Dashboard</h1>
+            
+            {deletionRequests.length > 0 && (
+                 <div className="bg-red-50 border border-red-200 p-6 rounded-lg shadow-md">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-semibold text-red-800">Deletion Requests ({deletionRequests.length})</h2>
+                        <button onClick={() => onNavigate('deletion-requests')} className="text-sm font-medium text-primary hover:underline">Manage Requests</button>
                     </div>
+                    <p className="text-red-700">There are submissions marked for deletion that require your approval.</p>
                 </div>
-            ))}
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-teal-100"><CheckCircle2 className="w-6 h-6 text-primary" /></div><div className="ml-4"><p className="text-sm text-gray-500">Compliance Rate</p><p className="text-2xl font-bold text-gray-800">{complianceRate}%</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-green-100"><FileText className="w-6 h-6 text-green-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Submitted</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalSubmitted}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-yellow-100"><Clock className="w-6 h-6 text-yellow-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Pending/Overdue</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalPending}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-blue-100"><User className="w-6 h-6 text-blue-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Reporting Facilities</p><p className="text-2xl font-bold text-gray-800">{facilities.length}</p></div></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Compliance by Program</h2><div ref={chartContainerRef} style={{ width: '100%', height: 300 }}><BarChart width={chartWidth} height={300} data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Legend /><Bar dataKey="Submitted" stackId="a" fill="#14b8a6" /><Bar dataKey="Pending" stackId="a" fill="#f59e0b" /></BarChart></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Submission Status</h2><div className="relative mb-4"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" /><input type="text" placeholder="Search for a facility..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"/></div>
+            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                {Object.keys(facilitiesByType).sort().map(type => (
+                    <div key={type}>
+                        <h3 className="text-sm font-semibold italic text-gray-500 mb-2">{type}</h3>
+                        <div className="space-y-2">
+                            {facilitiesByType[type].filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase())).map(facility => {
+                                const overallStatus = getOverallFacilityStatus(facility.name, programs, submissions, users);
+                                return (
+                                <div key={facility.id} className="border rounded-lg">
+                                    <button onClick={() => setExpandedFacility(expandedFacility === facility.name ? null : facility.name)} className="w-full flex justify-between items-center p-4 text-left">
+                                        <div className="flex items-center">
+                                            <span className="font-medium text-gray-800">{facility.name}</span>
+                                            <span className={`ml-3 px-2 py-1 text-xs font-semibold rounded-full ${overallStatus.style}`}>{overallStatus.text}</span>
+                                        </div>
+                                        {expandedFacility === facility.name ? <ChevronUp /> : <ChevronDown />}
+                                    </button>
+                                    {expandedFacility === facility.name && (
+                                        <div className="p-4 border-t bg-gray-50">
+                                            <ul className="space-y-2">
+                                                {programs.filter(p => (users.find(u => u.facilityName === facility.name)?.assignedPrograms || []).includes(p.id)).map(program => {
+                                                    const status = getStatusForProgram(facility.name, program, submissions);
+                                                    return (
+                                                        <li key={program.id} className={`flex justify-between items-center text-sm p-2 rounded-md ${status.text === 'Overdue' ? 'bg-red-50' : ''}`}>
+                                                            <span>{program.name}</span>
+                                                            <div className="flex items-center space-x-2">
+                                                                {status.isActionable && <a href={status.fileURL} download target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>}
+                                                                {status.isActionable && user.permissions?.canConfirmSubmissions && <button onClick={() => onConfirm(status.submissionId)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>}
+                                                                <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span>
+                                                            </div>
+                                                        </li>
+                                                    );
+                                                })}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )})}
+                        </div>
+                    </div>
+                ))}
+            </div>
         </div>
-    </div></div>
+    </div>
     );
 };
 
@@ -1109,7 +1257,7 @@ const SubmissionsHistory = ({ user, submissions, setSubmissions, db }) => {
     };
     
     return (
-        <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">Your Submission History</h1><div className="bg-white p-6 rounded-lg shadow-md"><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userSubmissions.length > 0 ? userSubmissions.map(sub => (<tr key={sub.id}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.uploaderName}</td><td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">{sub.fileURL && <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full inline-flex items-center"><Download className="w-4 h-4"/></a>}{!sub.confirmed && (<button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center"><Trash2 className="w-4 h-4"/></button>)}</td></tr>)) : (<tr><td colSpan="5" className="text-center py-10 text-gray-500">No submissions found.</td></tr>)}</tbody></table></div></div></div>
+        <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">Your Submission History</h1><div className="bg-white p-6 rounded-lg shadow-md"><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userSubmissions.length > 0 ? userSubmissions.map(sub => (<tr key={sub.id}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.uploaderName}</td><td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">{sub.fileURL && <a href={sub.fileURL} download target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full inline-flex items-center"><Download className="w-4 h-4"/></a>}{!sub.confirmed && (<button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center"><Trash2 className="w-4 h-4"/></button>)}</td></tr>)) : (<tr><td colSpan="5" className="text-center py-10 text-gray-500">No submissions found.</td></tr>)}</tbody></table></div></div></div>
     );
 };
 
@@ -1653,6 +1801,205 @@ const AuditLogPage = ({ db }) => {
     );
 };
 
+const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedProgram, setSelectedProgram] = useState('');
+    const [selectedFacility, setSelectedFacility] = useState('');
+    const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+    const [selectedMonth, setSelectedMonth] = useState('');
+
+    const handleDeleteSubmission = async (subId) => {
+        if (window.confirm("Are you sure you want to permanently delete this submission? This action cannot be undone.")) {
+            try {
+                await deleteDoc(doc(db, "submissions", subId));
+                // Note: This does not delete the file from storage, only the record from Firestore.
+                // A more robust solution would involve a Cloud Function to handle file deletion from Storage.
+                alert("Submission record deleted successfully.");
+            } catch (error) {
+                alert(`Error deleting submission: ${error.message}`);
+            }
+        }
+    };
+
+    const handleRequestDeletion = async (subId) => {
+        if (window.confirm("Are you sure you want to request deletion for this submission? A Super Admin will need to approve it.")) {
+            try {
+                const subDocRef = doc(db, "submissions", subId);
+                await updateDoc(subDocRef, {
+                    deletionRequest: {
+                        requestedBy: user.uid,
+                        requestedByName: user.name,
+                        timestamp: serverTimestamp()
+                    }
+                });
+                alert("Deletion requested. Awaiting Super Admin approval.");
+            } catch (error) {
+                alert(`Error requesting deletion: ${error.message}`);
+            }
+        }
+    };
+
+    const filteredSubmissions = useMemo(() => {
+        let subs = submissions.filter(s => !s.deletionRequest); // Exclude items pending deletion
+
+        // Role-based filtering
+        if (user.role === 'PHO Admin') {
+            const assignedProgramNames = programs
+                .filter(p => user.assignedPrograms.includes(p.id))
+                .map(p => p.name);
+            subs = subs.filter(s => assignedProgramNames.includes(s.programName));
+        } else if (user.role === 'Facility Admin' || user.role === 'Facility User') {
+            subs = subs.filter(s => s.facilityName === user.facilityName);
+        }
+
+        // UI filters
+        if (searchTerm) {
+            subs = subs.filter(s => 
+                s.programName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                s.facilityName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                s.uploaderName.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+        }
+        if (selectedProgram) {
+            subs = subs.filter(s => s.programName === selectedProgram);
+        }
+        if (selectedFacility) {
+            subs = subs.filter(s => s.facilityName === selectedFacility);
+        }
+        if (selectedYear) {
+            subs = subs.filter(s => new Date(s.submissionDate).getFullYear() === selectedYear);
+        }
+        if (selectedMonth) {
+            subs = subs.filter(s => (new Date(s.submissionDate).getMonth() + 1) === parseInt(selectedMonth));
+        }
+        
+        return subs.sort((a,b) => new Date(b.submissionDate) - new Date(a.submissionDate));
+
+    }, [user, submissions, programs, searchTerm, selectedProgram, selectedFacility, selectedYear, selectedMonth]);
+
+    const programOptions = [...new Set(programs.map(p => p.name))].sort();
+    const facilityOptions = [...new Set(facilities.map(f => f.name))].sort();
+    const monthOptions = [
+        { value: 1, label: 'January' }, { value: 2, label: 'February' }, { value: 3, label: 'March' }, 
+        { value: 4, label: 'April' }, { value: 5, label: 'May' }, { value: 6, label: 'June' }, 
+        { value: 7, label: 'July' }, { value: 8, label: 'August' }, { value: 9, label: 'September' }, 
+        { value: 10, label: 'October' }, { value: 11, label: 'November' }, { value: 12, label: 'December' }
+    ];
+
+    return (
+        <div className="space-y-6">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Databank</h1>
+            <div className="bg-white p-6 rounded-lg shadow-md">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
+                    <input 
+                        type="text"
+                        placeholder="Search..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full px-4 py-2 border rounded-lg md:col-span-1"
+                    />
+                    <select value={selectedProgram} onChange={e => setSelectedProgram(e.target.value)} className="w-full px-4 py-2 border rounded-lg bg-white">
+                        <option value="">All Programs</option>
+                        {programOptions.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    {user.role !== 'Facility Admin' && user.role !== 'Facility User' && (
+                        <select value={selectedFacility} onChange={e => setSelectedFacility(e.target.value)} className="w-full px-4 py-2 border rounded-lg bg-white">
+                            <option value="">All Facilities</option>
+                            {facilityOptions.map(f => <option key={f} value={f}>{f}</option>)}
+                        </select>
+                    )}
+                     <select value={selectedYear} onChange={e => setSelectedYear(parseInt(e.target.value))} className="w-full px-4 py-2 border rounded-lg bg-white">
+                        <option value={new Date().getFullYear()}>{new Date().getFullYear()}</option>
+                        <option value={new Date().getFullYear() - 1}>{new Date().getFullYear() - 1}</option>
+                    </select>
+                    <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className="w-full px-4 py-2 border rounded-lg bg-white">
+                        <option value="">All Months</option>
+                        {monthOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    </select>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {filteredSubmissions.map(sub => (
+                                <tr key={sub.id}>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.programName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.facilityName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.uploaderName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.submissionDate}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
+                                        <a href={sub.fileURL} download target="_blank" rel="noopener noreferrer" className="text-primary hover:text-secondary inline-block">
+                                            <Download className="w-5 h-5"/>
+                                        </a>
+                                        {user.role === 'Super Admin' && (
+                                            <button onClick={() => handleDeleteSubmission(sub.id)} className="text-red-600 hover:text-red-800 inline-block">
+                                                <Trash2 className="w-5 h-5"/>
+                                            </button>
+                                        )}
+                                        {user.role === 'PHO Admin' && (
+                                            <button onClick={() => handleRequestDeletion(sub.id)} className="text-red-600 hover:text-red-800 inline-block">
+                                                <Trash2 className="w-5 h-5"/>
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const DeletionRequestsPage = ({ submissions, onApprove, onDeny }) => {
+    const requests = submissions.filter(s => s.deletionRequest);
+
+    return (
+        <div className="space-y-6">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Deletion Requests</h1>
+             <div className="bg-white p-6 rounded-lg shadow-md">
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requested By</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date Requested</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {requests.map(sub => (
+                                <tr key={sub.id}>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.programName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.facilityName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.deletionRequest.requestedByName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">{new Date(sub.deletionRequest.timestamp?.toDate()).toLocaleDateString()}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
+                                        <button onClick={() => onDeny(sub.id)} className="p-2 text-gray-500 hover:bg-gray-200 rounded-full"><Ban className="w-5 h-5"/></button>
+                                        <button onClick={() => onApprove(sub.id)} className="p-2 text-green-600 hover:bg-green-100 rounded-full"><Check className="w-5 h-5"/></button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+
 // --- MAIN APP COMPONENT ---
 export default function App() {
     const [user, setUser] = useState(null);
@@ -1666,6 +2013,7 @@ export default function App() {
     const [announcements, setAnnouncements] = useState([]);
     const [showAnnouncementsModal, setShowAnnouncementsModal] = useState(false);
     const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
+    const [onlineStatuses, setOnlineStatuses] = useState({});
     
     const auth = getAuth(app);
     const db = getFirestore(app);
@@ -1714,6 +2062,24 @@ export default function App() {
     useEffect(() => {
         if (!user) return;
 
+        // Set up Realtime Database presence
+        const myConnectionsRef = ref(rtdb, `status/${user.uid}`);
+        const connectedRef = ref(rtdb, '.info/connected');
+        
+        onValue(connectedRef, (snap) => {
+            if (snap.val() === true) {
+                set(myConnectionsRef, true);
+                onDisconnect(myConnectionsRef).remove();
+            }
+        });
+
+        // Listen for status changes
+        const statusRef = ref(rtdb, 'status');
+        onValue(statusRef, (snapshot) => {
+            setOnlineStatuses(snapshot.val() || {});
+        });
+
+
         const deleteOldAnnouncements = async () => {
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -1754,7 +2120,10 @@ export default function App() {
             }),
         ];
     
-        return () => unsubscribes.forEach(unsub => unsub());
+        return () => {
+            unsubscribes.forEach(unsub => unsub());
+            off(statusRef);
+        }
     }, [user, db]);
 
 
@@ -1768,6 +2137,8 @@ export default function App() {
     };
 
     const handleLogout = () => {
+        const userStatusRef = ref(rtdb, `status/${user.uid}`);
+        set(userStatusRef, false);
         signOut(auth);
         setPage('dashboard');
     };
@@ -1776,6 +2147,12 @@ export default function App() {
         const subDocRef = doc(db, 'submissions', submissionId);
         await setDoc(subDocRef, { confirmed: true, status: 'Submitted' }, { merge: true });
         alert('Submission confirmed!');
+    };
+    
+    const handleDenySubmission = async (submissionId) => {
+        const subDocRef = doc(db, 'submissions', submissionId);
+        await setDoc(subDocRef, { confirmed: false, status: 'Rejected' }, { merge: true });
+        alert('Submission rejected.');
     };
 
     const handleAddAnnouncement = async (title, message) => {
@@ -1793,6 +2170,19 @@ export default function App() {
             await deleteDoc(doc(db, "announcements", announcementId));
             await logAudit(db, user, "Delete Announcement", { announcementId });
         }
+    };
+    
+    const handleApproveDeletion = async (subId) => {
+        await deleteDoc(doc(db, "submissions", subId));
+        alert('Deletion approved.');
+    };
+
+    const handleDenyDeletion = async (subId) => {
+        const subDocRef = doc(db, "submissions", subId);
+        await updateDoc(subDocRef, {
+            deletionRequest: null
+        });
+        alert('Deletion denied.');
     };
 
     const handleBellClick = () => {
@@ -1816,11 +2206,14 @@ export default function App() {
         switch(page) {
             case 'dashboard':
                 if (user.role === 'Facility User') return <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
-                if (user.role === 'PHO Admin') return <PhoAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} />;
-                return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={user} announcements={announcements} onAddAnnouncement={() => setShowAnnouncementsModal(true)} onDeleteAnnouncement={handleDeleteAnnouncement} />;
+                if (user.role === 'PHO Admin') return <PhoAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} onDeny={handleDenySubmission} />;
+                if (user.role === 'Facility Admin') return <FacilityAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onlineStatuses={onlineStatuses}/>;
+                return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={user} announcements={announcements} onAddAnnouncement={() => setShowAnnouncementsModal(true)} onDeleteAnnouncement={handleDeleteAnnouncement} onApproveDeletion={handleApproveDeletion} onDenyDeletion={handleDenyDeletion} onNavigate={setPage} />;
             case 'reports':
                 if (user.permissions?.canExportData) return <ReportsPage programs={programsForUser} submissions={submissions} users={users} user={user} />;
                 break;
+            case 'databank':
+                return <DatabankPage user={user} submissions={submissions} programs={programs} facilities={facilities} db={db} />;
             case 'facilities':
                 if (user.permissions?.canManageFacilities) return <FacilityManagementPage user={user} facilities={facilities} db={db} />;
                 break;
@@ -1837,6 +2230,9 @@ export default function App() {
             case 'audit':
                 if (user.permissions?.canViewAuditLog) return <AuditLogPage db={db} />;
                 break;
+            case 'deletion-requests':
+                 if (user.role === 'Super Admin') return <DeletionRequestsPage submissions={submissions} onApprove={handleApproveDeletion} onDeny={handleDenyDeletion} />;
+                 break;
             default:
                 return <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
         }
