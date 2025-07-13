@@ -4,6 +4,7 @@ import { Bell, AlertTriangle, CheckCircle2, Clock, Upload, FileText, User, LogOu
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import { getFirestore, collection, getDocs, getDoc, addDoc, setDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, orderBy, writeBatch, updateDoc } from "firebase/firestore";
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getDatabase, ref, onValue, off, set, onDisconnect } from "firebase/database";
 
 
@@ -26,6 +27,7 @@ if (!firebaseConfig.apiKey) {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const rtdb = getDatabase(app);
+const storage = getStorage(app);
 
 
 // --- HELPER FUNCTIONS ---
@@ -35,13 +37,13 @@ const getStatusForProgram = (facilityName, program, submissions) => {
         .sort((a, b) => new Date(b.submissionDate) - new Date(a.submissionDate))[0];
 
     if (!lastSubmission) return { text: 'Pending', style: 'bg-yellow-100 text-yellow-800 border border-yellow-300', icon: <Clock className="w-4 h-4" />, isActionable: false };
-    
+
     if (lastSubmission.status === 'Rejected') {
         return { text: 'Rejected', style: 'bg-red-100 text-red-800 border border-red-300', icon: <Ban className="w-4 h-4" />, isActionable: false };
     }
 
     if (!lastSubmission.confirmed) {
-        return { text: 'Pending Confirmation', style: 'bg-orange-100 text-orange-800 border border-orange-300', icon: <HelpCircle className="w-4 h-4" />, isActionable: true, submissionId: lastSubmission.id, fileURL: lastSubmission.fileURL };
+        return { text: 'Pending Confirmation', style: 'bg-orange-100 text-orange-800 border border-orange-300', icon: <HelpCircle className="w-4 h-4" />, isActionable: true, submissionId: lastSubmission.id, fileURL: lastSubmission.fileURL, fileName: lastSubmission.fileName };
     }
 
     const today = new Date();
@@ -252,24 +254,35 @@ const FacilityDashboard = ({ user, allPrograms, submissions, setSubmissions, db 
     const handleUploadClick = (program) => { setSelectedProgram(program); setShowUploadModal(true); };
 
     const handleFileUpload = async (file, morbidityWeek) => {
-        // This would involve uploading to Firebase Storage and then creating a doc in Firestore
-        // For now, we'll just add to the local state to demonstrate the flow
-        const newSubmission = {
-            facilityName: user.facilityName,
-            programName: selectedProgram.name,
-            submissionDate: new Date().toISOString().split('T')[0],
-            status: 'Pending Confirmation',
-            fileURL: `/uploads/${file.name}`, // This would be the Firebase Storage URL
-            confirmed: false,
-            uploaderName: user.name,
-            morbidityWeek: morbidityWeek,
-        };
+        if (!file || !selectedProgram) return;
 
-        await addDoc(collection(db, "submissions"), newSubmission);
+        const fileRef = storageRef(storage, `submissions/${user.facilityName}/${selectedProgram.name}/${morbidityWeek}/${file.name}`);
         
-        setShowUploadModal(false);
-        setSelectedProgram(null);
-        alert(`Proof for "${selectedProgram.name}" uploaded successfully for Morbidity Week ${morbidityWeek}. Pending PHO confirmation.`);
+        try {
+            const snapshot = await uploadBytes(fileRef, file);
+            const downloadURL = await getDownloadURL(snapshot.ref);
+
+            const newSubmission = {
+                facilityName: user.facilityName,
+                programName: selectedProgram.name,
+                submissionDate: new Date().toISOString().split('T')[0],
+                status: 'Pending Confirmation',
+                fileURL: downloadURL, 
+                fileName: file.name,
+                confirmed: false,
+                uploaderName: user.name,
+                morbidityWeek: morbidityWeek,
+            };
+
+            await addDoc(collection(db, "submissions"), newSubmission);
+            
+            setShowUploadModal(false);
+            setSelectedProgram(null);
+            alert(`Proof for "${selectedProgram.name}" uploaded successfully for Morbidity Week ${morbidityWeek}. Pending PHO confirmation.`);
+        } catch (error) {
+            console.error("Error uploading file:", error);
+            alert(`File upload failed: ${error.message}`);
+        }
     };
 
     const userPrograms = allPrograms.filter(p => p.active && user.assignedPrograms.includes(p.id));
@@ -284,18 +297,22 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDe
     const myPrograms = programs.filter(p => assignedProgramIds.includes(p.id));
     const myProgramNames = myPrograms.map(p => p.name);
 
-    const myProgramsSubmissions = submissions.filter(s => myProgramNames.includes(s.programName));
-
-    const pendingSubmissions = myProgramsSubmissions.filter(s => {
-        const program = myPrograms.find(p => p.name === s.programName);
-        if (!program) return false;
-        const status = getStatusForProgram(s.facilityName, program, submissions);
-        return status.isActionable;
-    });
+    const pendingSubmissions = submissions.filter(s =>
+        myProgramNames.includes(s.programName) &&
+        !s.confirmed &&
+        s.status !== 'Rejected'
+    );
 
     const chartData = myPrograms.map(p => {
-        const facilitiesForProgram = users.filter(u => u.assignedPrograms?.includes(p.id));
-        const submittedCount = submissions.filter(s => s.programName === p.name && s.confirmed).length;
+        const facilitiesForProgram = users.filter(u => u.assignedPrograms?.includes(p.id) && u.role === 'Facility User');
+        
+        const submittedFacilities = new Set(
+            submissions
+                .filter(s => s.programName === p.name && s.confirmed)
+                .map(s => s.facilityName)
+        );
+        const submittedCount = submittedFacilities.size;
+
         return { name: p.name, Submitted: submittedCount, Pending: facilitiesForProgram.length - submittedCount };
     });
     
@@ -309,7 +326,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDe
                         <BarChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="name" />
-                            <YAxis />
+                            <YAxis allowDecimals={false} />
                             <Tooltip />
                             <Legend />
                             <Bar dataKey="Submitted" stackId="a" fill="#14b8a6" />
@@ -325,7 +342,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDe
                                 <p className="font-semibold">{sub.programName}</p>
                                 <p className="text-sm text-gray-600">From: {sub.facilityName}</p>
                                 <div className="flex justify-between items-center mt-2">
-                                    <a href={sub.fileURL} download target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Download className="w-5 h-5"/></a>
+                                    <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Download className="w-5 h-5"/></a>
                                     <div className="flex space-x-2">
                                         <button onClick={() => onDeny(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Ban className="w-5 h-5"/></button>
                                         {user.permissions?.canConfirmSubmissions && (
@@ -447,47 +464,79 @@ const FacilityAdminDashboard = ({ user, programs, submissions, users, onlineStat
 const AdminDashboard = ({ facilities, programs, submissions, users, onConfirm, user, announcements, onAddAnnouncement, onDeleteAnnouncement, onApproveDeletion, onDenyDeletion, onNavigate }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedFacility, setExpandedFacility] = useState(null);
-    const chartContainerRef = useRef(null);
-    const [chartWidth, setChartWidth] = useState(0);
-
-    const deletionRequests = submissions.filter(s => s.deletionRequest);
+    const [selectedProgramId, setSelectedProgramId] = useState('');
 
     useEffect(() => {
-        const handleResize = () => { if (chartContainerRef.current) { setChartWidth(chartContainerRef.current.offsetWidth); } };
-        handleResize();
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-    
-    const facilitiesByType = facilities.reduce((acc, facility) => {
-        if (facility.name === 'Provincial Health Office') return acc;
-        const type = facility.type || 'Uncategorized';
-        if (!acc[type]) {
-            acc[type] = [];
+        if (programs.length > 0 && !selectedProgramId) {
+            setSelectedProgramId(programs[0].id);
         }
-        acc[type].push(facility);
-        return acc;
-    }, {});
+    }, [programs, selectedProgramId]);
+    
+    const selectedProgram = useMemo(() => programs.find(p => p.id === selectedProgramId), [programs, selectedProgramId]);
 
+    const deletionRequests = useMemo(() => submissions.filter(s => s.deletionRequest), [submissions]);
 
-    const complianceData = facilities.map(facility => {
-        const facilityUser = users.find(u => u.facilityName === facility.name);
-        const applicablePrograms = facilityUser ? programs.filter(p => facilityUser.assignedPrograms.includes(p.id)) : [];
-        let submittedCount = applicablePrograms.filter(p => getStatusForProgram(facility.name, p, submissions).text === 'Submitted').length;
-        return { name: facility.name, submitted: submittedCount, pending: applicablePrograms.length - submittedCount };
-    });
-    const overallStats = complianceData.reduce((acc, curr) => ({ totalSubmitted: acc.totalSubmitted + curr.submitted, totalPending: acc.totalPending + curr.pending }), { totalSubmitted: 0, totalPending: 0 });
-    const totalExpectedReports = complianceData.reduce((acc, curr) => acc + curr.submitted + curr.pending, 0);
-    const complianceRate = totalExpectedReports > 0 ? (overallStats.totalSubmitted / totalExpectedReports * 100).toFixed(1) : 0;
-    const chartData = programs.map(p => {
-        const totalApplicable = users.filter(u => u.role === 'Facility User' && u.assignedPrograms.includes(p.id)).length;
-        const submittedCount = submissions.filter(s => s.programName === p.name && getStatusForProgram(s.facilityName, p, submissions).text === 'Submitted').length;
-        return { name: p.name, Submitted: submittedCount, Pending: totalApplicable - submittedCount };
-    });
+    const filteredFacilities = useMemo(() => {
+        if (!selectedProgram) return [];
+        
+        const applicableFacilityNames = new Set(
+            users
+                .filter(u => u.role === 'Facility User' && (u.assignedPrograms || []).includes(selectedProgram.id))
+                .map(u => u.facilityName)
+        );
+
+        return facilities.filter(f => applicableFacilityNames.has(f.name));
+    }, [selectedProgram, facilities, users]);
+
+    const complianceData = useMemo(() => {
+        if (!selectedProgram) {
+            return { totalSubmitted: 0, totalPending: 0, complianceRate: 0, totalFacilities: 0, chartData: [] };
+        }
+
+        const submittedFacilities = new Set(
+            submissions
+                .filter(s => s.programName === selectedProgram.name && s.confirmed)
+                .map(s => s.facilityName)
+        );
+        
+        const totalSubmitted = submittedFacilities.size;
+        const totalFacilities = filteredFacilities.length;
+        const totalPending = totalFacilities - totalSubmitted;
+        const complianceRate = totalFacilities > 0 ? ((totalSubmitted / totalFacilities) * 100).toFixed(1) : 0;
+        
+        const statsByType = filteredFacilities.reduce((acc, facility) => {
+            const type = facility.type || 'Uncategorized';
+            if (!acc[type]) {
+                acc[type] = { total: 0, submitted: 0 };
+            }
+            acc[type].total += 1;
+            if (submittedFacilities.has(facility.name)) {
+                acc[type].submitted += 1;
+            }
+            return acc;
+        }, {});
+        
+        const chartData = Object.keys(statsByType).map(type => ({
+            name: type,
+            Submitted: statsByType[type].submitted,
+            Pending: statsByType[type].total - statsByType[type].submitted
+        }));
+
+        return { totalSubmitted, totalPending, complianceRate, totalFacilities, chartData };
+    }, [selectedProgram, submissions, filteredFacilities]);
 
     return (
         <div className="space-y-6">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Provincial Compliance Dashboard</h1>
+            <div className="flex justify-between items-center">
+                 <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Provincial Compliance Dashboard</h1>
+                 <select 
+                     value={selectedProgramId} 
+                     onChange={e => setSelectedProgramId(e.target.value)}
+                     className="mt-1 py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
+                 >
+                     {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                 </select>
+            </div>
             
             {deletionRequests.length > 0 && (
                  <div className="bg-red-50 border border-red-200 p-6 rounded-lg shadow-md">
@@ -499,50 +548,78 @@ const AdminDashboard = ({ facilities, programs, submissions, users, onConfirm, u
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-teal-100"><CheckCircle2 className="w-6 h-6 text-primary" /></div><div className="ml-4"><p className="text-sm text-gray-500">Compliance Rate</p><p className="text-2xl font-bold text-gray-800">{complianceRate}%</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-green-100"><FileText className="w-6 h-6 text-green-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Submitted</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalSubmitted}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-yellow-100"><Clock className="w-6 h-6 text-yellow-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Total Pending/Overdue</p><p className="text-2xl font-bold text-gray-800">{overallStats.totalPending}</p></div></div><div className="bg-white p-6 rounded-lg shadow-md flex items-center"><div className="p-3 rounded-full bg-blue-100"><User className="w-6 h-6 text-blue-600" /></div><div className="ml-4"><p className="text-sm text-gray-500">Reporting Facilities</p><p className="text-2xl font-bold text-gray-800">{facilities.length}</p></div></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Compliance by Program</h2><div ref={chartContainerRef} style={{ width: '100%', height: 300 }}><BarChart width={chartWidth} height={300} data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Legend /><Bar dataKey="Submitted" stackId="a" fill="#14b8a6" /><Bar dataKey="Pending" stackId="a" fill="#f59e0b" /></BarChart></div></div><div className="bg-white p-6 rounded-lg shadow-md"><h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Submission Status</h2><div className="relative mb-4"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" /><input type="text" placeholder="Search for a facility..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"/></div>
-            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
-                {Object.keys(facilitiesByType).sort().map(type => (
-                    <div key={type}>
-                        <h3 className="text-sm font-semibold italic text-gray-500 mb-2">{type}</h3>
-                        <div className="space-y-2">
-                            {facilitiesByType[type].filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase())).map(facility => {
-                                const overallStatus = getOverallFacilityStatus(facility.name, programs, submissions, users);
-                                return (
-                                <div key={facility.id} className="border rounded-lg">
-                                    <button onClick={() => setExpandedFacility(expandedFacility === facility.name ? null : facility.name)} className="w-full flex justify-between items-center p-4 text-left">
-                                        <div className="flex items-center">
-                                            <span className="font-medium text-gray-800">{facility.name}</span>
-                                            <span className={`ml-3 px-2 py-1 text-xs font-semibold rounded-full ${overallStatus.style}`}>{overallStatus.text}</span>
-                                        </div>
-                                        {expandedFacility === facility.name ? <ChevronUp /> : <ChevronDown />}
-                                    </button>
-                                    {expandedFacility === facility.name && (
-                                        <div className="p-4 border-t bg-gray-50">
-                                            <ul className="space-y-2">
-                                                {programs.filter(p => (users.find(u => u.facilityName === facility.name)?.assignedPrograms || []).includes(p.id)).map(program => {
-                                                    const status = getStatusForProgram(facility.name, program, submissions);
-                                                    return (
-                                                        <li key={program.id} className={`flex justify-between items-center text-sm p-2 rounded-md ${status.text === 'Overdue' ? 'bg-red-50' : ''}`}>
-                                                            <span>{program.name}</span>
-                                                            <div className="flex items-center space-x-2">
-                                                                {status.isActionable && <a href={status.fileURL} download target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>}
-                                                                {status.isActionable && user.permissions?.canConfirmSubmissions && <button onClick={() => onConfirm(status.submissionId)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>}
-                                                                <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span>
-                                                            </div>
-                                                        </li>
-                                                    );
-                                                })}
-                                            </ul>
-                                        </div>
-                                    )}
-                                </div>
-                            )})}
-                        </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="p-3 rounded-full bg-teal-100"><CheckCircle2 className="w-6 h-6 text-primary" /></div>
+                    <div className="ml-4">
+                        <p className="text-sm text-gray-500">Compliance Rate</p>
+                        <p className="text-2xl font-bold text-gray-800">{complianceData.complianceRate}%</p>
                     </div>
-                ))}
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="p-3 rounded-full bg-green-100"><FileText className="w-6 h-6 text-green-600" /></div>
+                    <div className="ml-4">
+                        <p className="text-sm text-gray-500">Total Submitted</p>
+                        <p className="text-2xl font-bold text-gray-800">{complianceData.totalSubmitted}</p>
+                    </div>
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="p-3 rounded-full bg-yellow-100"><Clock className="w-6 h-6 text-yellow-600" /></div>
+                    <div className="ml-4">
+                        <p className="text-sm text-gray-500">Total Pending/Overdue</p>
+                        <p className="text-2xl font-bold text-gray-800">{complianceData.totalPending}</p>
+                    </div>
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="p-3 rounded-full bg-blue-100"><User className="w-6 h-6 text-blue-600" /></div>
+                    <div className="ml-4">
+                        <p className="text-sm text-gray-500">Reporting Facilities</p>
+                        <p className="text-2xl font-bold text-gray-800">{complianceData.totalFacilities}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-lg shadow-md">
+                <h2 className="text-xl font-semibold mb-4 text-gray-700">Compliance by Facility Type</h2>
+                <div style={{ width: '100%', height: 300 }}>
+                    <BarChart data={complianceData.chartData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="Submitted" stackId="a" fill="#14b8a6" />
+                        <Bar dataKey="Pending" stackId="a" fill="#f59e0b" />
+                    </BarChart>
+                </div>
+            </div>
+            
+            <div className="bg-white p-6 rounded-lg shadow-md">
+                <h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Submission Status</h2>
+                <div className="relative mb-4">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input type="text" placeholder="Search for a facility..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"/>
+                </div>
+                <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                    {filteredFacilities.filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase())).map(facility => {
+                        if (!selectedProgram) return null;
+                        const status = getStatusForProgram(facility.name, selectedProgram, submissions);
+                        return (
+                            <div key={facility.id} className="border rounded-lg p-4 flex justify-between items-center">
+                                <div className="flex items-center">
+                                    <span className="font-medium text-gray-800">{facility.name}</span>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    {status.isActionable && <a href={status.fileURL} download={status.fileName} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">View Proof</a>}
+                                    {status.isActionable && user.permissions?.canConfirmSubmissions && <button onClick={() => onConfirm(status.submissionId)} className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600">Confirm</button>}
+                                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>{status.icon}<span className="ml-1.5">{status.text}</span></span>
+                                </div>
+                            </div>
+                        )
+                    })}
+                </div>
             </div>
         </div>
-    </div>
     );
 };
 
@@ -1257,7 +1334,7 @@ const SubmissionsHistory = ({ user, submissions, setSubmissions, db }) => {
     };
     
     return (
-        <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">Your Submission History</h1><div className="bg-white p-6 rounded-lg shadow-md"><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userSubmissions.length > 0 ? userSubmissions.map(sub => (<tr key={sub.id}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.uploaderName}</td><td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">{sub.fileURL && <a href={sub.fileURL} download target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full inline-flex items-center"><Download className="w-4 h-4"/></a>}{!sub.confirmed && (<button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center"><Trash2 className="w-4 h-4"/></button>)}</td></tr>)) : (<tr><td colSpan="5" className="text-center py-10 text-gray-500">No submissions found.</td></tr>)}</tbody></table></div></div></div>
+        <div className="space-y-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-800">Your Submission History</h1><div className="bg-white p-6 rounded-lg shadow-md"><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th><th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{userSubmissions.length > 0 ? userSubmissions.map(sub => (<tr key={sub.id}><td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.uploaderName}</td><td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">{sub.fileURL && <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full inline-flex items-center"><Download className="w-4 h-4"/></a>}{!sub.confirmed && (<button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center"><Trash2 className="w-4 h-4"/></button>)}</td></tr>)) : (<tr><td colSpan="5" className="text-center py-10 text-gray-500">No submissions found.</td></tr>)}</tbody></table></div></div></div>
     );
 };
 
@@ -1936,7 +2013,7 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.uploaderName}</td>
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.submissionDate}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
-                                        <a href={sub.fileURL} download target="_blank" rel="noopener noreferrer" className="text-primary hover:text-secondary inline-block">
+                                        <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-secondary inline-block">
                                             <Download className="w-5 h-5"/>
                                         </a>
                                         {user.role === 'Super Admin' && (
@@ -2196,7 +2273,7 @@ export default function App() {
     if (!user) return <LoginScreen onLogin={handleLogin} />;
 
     const loggedInUserDetails = users.find(u => u.id === user.uid);
-    const activePrograms = programs.filter(p => p.active);
+    const activePrograms = programs.filter(p => p.active !== false);
     
     const programsForUser = (user.role === 'PHO Admin' && loggedInUserDetails)
         ? activePrograms.filter(p => loggedInUserDetails.assignedPrograms.includes(p.id))
@@ -2205,7 +2282,7 @@ export default function App() {
     const renderPage = () => {
         switch(page) {
             case 'dashboard':
-                if (user.role === 'Facility User') return <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
+                if (user.role === 'Facility User') return <FacilityDashboard user={loggedInUserDetails} allPrograms={activePrograms} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
                 if (user.role === 'PHO Admin') return <PhoAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} onDeny={handleDenySubmission} />;
                 if (user.role === 'Facility Admin') return <FacilityAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onlineStatuses={onlineStatuses}/>;
                 return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={user} announcements={announcements} onAddAnnouncement={() => setShowAnnouncementsModal(true)} onDeleteAnnouncement={handleDeleteAnnouncement} onApproveDeletion={handleApproveDeletion} onDenyDeletion={handleDenyDeletion} onNavigate={setPage} />;
@@ -2214,6 +2291,7 @@ export default function App() {
                 break;
             case 'databank':
                 return <DatabankPage user={user} submissions={submissions} programs={programs} facilities={facilities} db={db} />;
+                break;
             case 'facilities':
                 if (user.permissions?.canManageFacilities) return <FacilityManagementPage user={user} facilities={facilities} db={db} />;
                 break;
@@ -2234,7 +2312,7 @@ export default function App() {
                  if (user.role === 'Super Admin') return <DeletionRequestsPage submissions={submissions} onApprove={handleApproveDeletion} onDeny={handleDenyDeletion} />;
                  break;
             default:
-                return <FacilityDashboard user={loggedInUserDetails} allPrograms={programs} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
+                return <FacilityDashboard user={loggedInUserDetails} allPrograms={activePrograms} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
         }
         return <div className="p-6"><h1 className="text-2xl font-bold text-red-600">Access Denied</h1><p>You do not have permission to view this page.</p></div>;
     };
