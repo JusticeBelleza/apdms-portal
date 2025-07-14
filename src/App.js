@@ -6,6 +6,7 @@ import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWith
 import { getFirestore, collection, getDocs, getDoc, addDoc, setDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, orderBy, writeBatch, updateDoc } from "firebase/firestore";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getDatabase, ref, onValue, off, set, onDisconnect } from "firebase/database";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 
 // --- FIREBASE CONFIGURATION ---
@@ -1193,7 +1194,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
 
     const facilityUsersByFacility = users
         .filter(u => u.facilityName !== 'Provincial Health Office')
-        .sort((a,b) => a.facilityName.localeCompare(b.facilityName) || a.name.localeCompare(b.name))
+        .sort((a,b) => a.facilityName.localeCompare(b.name) || a.name.localeCompare(b.name))
         .reduce((acc, user) => {
             const { facilityName } = user;
             if (!acc[facilityName]) {
@@ -1243,10 +1244,48 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
         setShowEditModal(true);
     };
 
-    const handleDeleteUser = async (userId) => {
-        if (window.confirm('Are you sure you want to delete this user? This will not delete their submissions, but the user will be permanently removed.')) {
-            await deleteDoc(doc(db, "users", userId));
-            await logAudit(db, currentUser, "Delete User", { targetUserId: userId });
+    const handleDeleteUser = async (userId, userEmail) => {
+        if (window.confirm(`Are you sure you want to permanently delete this user (${userEmail})? This action cannot be undone.`)) {
+            
+            const firebaseUser = auth.currentUser;
+            if (!firebaseUser) {
+                alert("Error: You must be logged in to perform this action.");
+                return;
+            }
+
+            try {
+                const idToken = await firebaseUser.getIdToken(true);
+
+                const functionUrl = 'https://us-central1-apdms-portal.cloudfunctions.net/deleteUser';
+
+                const response = await fetch(functionUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${idToken}`
+                    },
+                    body: JSON.stringify({ data: { uid: userId } })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to delete user.');
+                }
+
+                const result = await response.json();
+
+                // After successful deletion from Auth, delete from Firestore
+                await deleteDoc(doc(db, "users", userId));
+                
+                // Use the 'currentUser' prop for logging, which contains the full user profile
+                await logAudit(db, currentUser, "Permanently Delete User", { targetUserId: userId });
+
+                alert(result.data.message || 'User successfully deleted.');
+    
+            } catch (error) {
+                console.error("Error deleting user:", error);
+                alert(`An error occurred while deleting the user: ${error.message}`);
+            }
         }
     };
 
@@ -1293,7 +1332,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
                     </label>
                 )}
                 {canEditOrDelete(user) && <button onClick={() => openEditModal(user)} className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Edit className="w-4 h-4"/></button>}
-                {canEditOrDelete(user) && <button onClick={() => handleDeleteUser(user.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Trash2 className="w-4 h-4"/></button>}
+                {canEditOrDelete(user) && <button onClick={() => handleDeleteUser(user.id, user.email)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Trash2 className="w-4 h-4"/></button>}
             </div>
         </div>
     );
