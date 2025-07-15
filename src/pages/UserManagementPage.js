@@ -96,7 +96,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     const confirmDeleteUser = async () => {
         if (!userToDelete) return;
 
-        const toastId = toast.loading('Deleting user...'); // Start loading toast
+        const toastId = toast.loading('Deleting user...');
         const { id } = userToDelete;
         const firebaseUser = auth.currentUser;
         if (!firebaseUser) {
@@ -110,7 +110,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
             const response = await fetch(functionUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-                body: JSON.stringify({ data: { uid: id } })
+                body: JSON.stringify({ uid: id }) 
             });
 
             if (!response.ok) {
@@ -119,13 +119,21 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
             }
 
             const result = await response.json();
-            // The Cloud Function deletes the user from Firestore now.
-            // await deleteDoc(doc(db, "users", id)); 
-            await logAudit(db, currentUser, "Permanently Delete User", { targetUserId: id });
-            toast.success(result.data.message || 'User successfully deleted.', { id: toastId }); // Success toast
+            
+            // --- Start of Fix ---
+            // Create a safe user object for logging, ensuring all required fields have fallbacks.
+            const loggingUser = {
+                uid: currentUser?.uid || 'UNKNOWN_USER_ID',
+                name: currentUser?.name || 'Unknown Admin',
+                role: currentUser?.role || 'Unknown Role' // Added role with a fallback
+            };
+            await logAudit(db, loggingUser, "Permanently Delete User", { targetUserId: id });
+            // --- End of Fix ---
+
+            toast.success(result.message || 'User successfully deleted.', { id: toastId });
         } catch (error) {
             console.error("Error deleting user:", error);
-            toast.error(`An error occurred: ${error.message}`, { id: toastId }); // Error toast
+            toast.error(`An error occurred: ${error.message}`, { id: toastId });
         } finally {
             setShowConfirmModal(false);
             setUserToDelete(null);
@@ -133,14 +141,14 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     };
 
     const handleToggleUserStatus = async (user, isActive) => {
-        const toastId = toast.loading(isActive ? "Deactivating user..." : "Activating user..."); // Start loading toast
+        const toastId = toast.loading(isActive ? "Deactivating user..." : "Activating user...");
         try {
             const userDocRef = doc(db, "users", user.id);
             await setDoc(userDocRef, { isActive: !isActive }, { merge: true });
             await logAudit(db, currentUser, isActive ? "Deactivate User" : "Activate User", { targetUserName: user.name });
-            toast.success(`User has been ${isActive ? "deactivated" : "activated"}.`, { id: toastId }); // Success toast
+            toast.success(`User has been ${isActive ? "deactivated" : "activated"}.`, { id: toastId });
         } catch(error) {
-            toast.error(`Failed to update status: ${error.message}`, { id: toastId }); // Error toast
+            toast.error(`Failed to update status: ${error.message}`, { id: toastId });
         }
     };
 

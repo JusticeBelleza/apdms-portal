@@ -1,6 +1,6 @@
 // src/App.js
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react'; // Import useRef
 import toast, { Toaster } from 'react-hot-toast';
 
 // Firebase and Auth
@@ -52,38 +52,39 @@ export default function App() {
     
     const [showDeletionConfirmation, setShowDeletionConfirmation] = useState(false);
     const [deletionInfo, setDeletionInfo] = useState({ subId: null, action: null });
+    
+    const listenerUnsubscribes = useRef([]);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
                 const userDocRef = doc(db, "users", firebaseUser.uid);
                 const userDocSnap = await getDoc(userDocRef);
 
                 if (userDocSnap.exists()) {
-                     const userData = userDocSnap.data();
-                     if (userData.isActive === false) {
-                         toast.error("Your account has been deactivated. Please contact an administrator.");
-                         signOut(auth);
-                         return;
-                     }
+                    const userData = userDocSnap.data();
+                    if (userData.isActive === false) {
+                        toast.error("Your account has been deactivated. Please contact an administrator.");
+                        signOut(auth);
+                        return;
+                    }
 
-                     const permsDocRef = doc(db, "permissions", userData.role);
-                     const permsDocSnap = await getDoc(permsDocRef);
-                     
-                     let permissions = {};
-                     if (permsDocSnap.exists()) {
-                         permissions = permsDocSnap.data();
-                     }
-                     if (userData.role === 'Super Admin') {
+                    const permsDocRef = doc(db, "permissions", userData.role);
+                    const permsDocSnap = await getDoc(permsDocRef);
+                    
+                    let permissions = {};
+                    if (permsDocSnap.exists()) {
+                        permissions = permsDocSnap.data();
+                    }
+                    if (userData.role === 'Super Admin') {
                         permissions = { canManageUsers: true, canManageFacilities: true, canManagePrograms: true, canManagePermissions: true, canViewAuditLog: true, canExportData: true, canConfirmSubmissions: true };
-                     }
+                    }
 
-                     // *** CHANGE #1: Get seenAnnouncements from the user's document ***
-                     setUser({ 
-                         uid: firebaseUser.uid, 
-                         ...userData, 
-                         permissions, 
-                         seenAnnouncements: userData.seenAnnouncements || [] // Default to an empty array
+                    setUser({ 
+                        uid: firebaseUser.uid, 
+                        ...userData, 
+                        permissions, 
+                        seenAnnouncements: userData.seenAnnouncements || []
                     });
 
                 } else {
@@ -96,14 +97,19 @@ export default function App() {
             setLoading(false);
         });
 
-        return () => unsubscribe();
+        return () => unsubscribeAuth();
     }, []);
 
-    // *** CHANGE #2: New useEffect to calculate unread count when user or announcements change ***
     useEffect(() => {
         if (user && announcements.length > 0) {
             const seenIds = user.seenAnnouncements || [];
             const newUnreadCount = announcements.filter(ann => !seenIds.includes(ann.id)).length;
+            
+            console.log("--- Notification Debug ---");
+            console.log("Total announcements fetched:", announcements.length);
+            console.log("Announcement IDs seen by user:", seenIds);
+            console.log("Calculated unread count:", newUnreadCount);
+
             setUnreadAnnouncements(newUnreadCount);
         } else {
             setUnreadAnnouncements(0);
@@ -111,7 +117,11 @@ export default function App() {
     }, [user, announcements]);
 
     useEffect(() => {
-        if (!user) return;
+        if (!user) {
+            listenerUnsubscribes.current.forEach(unsub => unsub());
+            listenerUnsubscribes.current = [];
+            return;
+        };
 
         const myConnectionsRef = rtdbRef(rtdb, `status/${user.uid}`);
         const connectedRef = rtdbRef(rtdb, '.info/connected');
@@ -140,24 +150,28 @@ export default function App() {
 
         deleteOldAnnouncements();
     
-        const unsubscribes = [
+        listenerUnsubscribes.current = [
             onSnapshot(collection(db, "programs"), (snapshot) => setPrograms(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(collection(db, "users"), (snapshot) => setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(collection(db, "facilities"), (snapshot) => setFacilities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(collection(db, "submissions"), (snapshot) => setSubmissions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
-            // Removed unread count logic from here, as it's now in its own useEffect
             onSnapshot(query(collection(db, "announcements"), orderBy("timestamp", "desc")), (snapshot) => {
                 setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
             }),
         ];
     
         return () => {
-            unsubscribes.forEach(unsub => unsub());
+            listenerUnsubscribes.current.forEach(unsub => unsub());
             off(statusRef);
         }
     }, [user]);
 
     const handleLogin = async (email, password) => {
+        if (!email || !password) {
+            toast.error("Email and password cannot be empty.");
+            return;
+        }
+
         setLoading(true);
         const toastId = toast.loading('Logging in...');
         try {
@@ -165,11 +179,32 @@ export default function App() {
             toast.success('Successfully logged in!', { id: toastId });
         } catch (error) {
             setLoading(false);
-            toast.error(`Login failed: Invalid credentials`, { id: toastId });
+            let errorMessage = 'An unknown error occurred.';
+            switch (error.code) {
+                case 'auth/user-not-found':
+                    errorMessage = 'No user found with this email.';
+                    break;
+                case 'auth/wrong-password':
+                    errorMessage = 'Incorrect password. Please try again.';
+                    break;
+                case 'auth/invalid-email':
+                    errorMessage = 'The email address is not valid.';
+                    break;
+                case 'auth/invalid-credential':
+                     errorMessage = 'Invalid credentials. Please check your email and password.';
+                     break;
+                default:
+                    errorMessage = 'Login failed. Please try again.';
+                    break;
+            }
+            toast.error(errorMessage, { id: toastId });
         }
     };
 
     const handleLogout = () => {
+        listenerUnsubscribes.current.forEach(unsub => unsub());
+        listenerUnsubscribes.current = [];
+
         if(user) {
             const userStatusRef = rtdbRef(rtdb, `status/${user.uid}`);
             set(userStatusRef, false);
@@ -244,17 +279,14 @@ export default function App() {
         toast.error('Deletion request denied.');
     };
 
-    // *** CHANGE #3: Update Firestore instead of localStorage ***
     const markAnnouncementsAsRead = async () => {
         if (!user) return;
         const userDocRef = doc(db, "users", user.uid);
         const announcementIds = announcements.map(ann => ann.id);
         
         try {
-            // Update the user's document in Firestore
             await updateDoc(userDocRef, { seenAnnouncements: announcementIds });
             
-            // Optimistically update the local user state so the UI updates instantly
             setUser(prevUser => ({ ...prevUser, seenAnnouncements: announcementIds }));
             setUnreadAnnouncements(0);
         } catch (err) {
@@ -314,40 +346,49 @@ export default function App() {
         return <LoadingScreen />;
     }
 
-    if (!user) {
-        return <LoginScreen onLogin={handleLogin} />;
-    }
-
-    const loggedInUserDetails = { ...user, ...users.find(u => u.id === user.uid) };
-
+    // --- Start of Fix ---
+    // The <Toaster /> component is moved to the top level of the return statement.
+    // This ensures it is always rendered and can display notifications
+    // regardless of the user's authentication state.
     return (
         <>
             <Toaster position="top-center" reverseOrder={false} />
-            <div className="flex h-screen bg-gray-100 font-sans">
-                <Sidebar user={loggedInUserDetails} onNavigate={setPage} onLogout={handleLogout} currentPage={page} />
-                <main className="flex-1 flex flex-col overflow-hidden">
-                    <Header
-                        user={loggedInUserDetails}
-                        onLogout={handleLogout}
-                        unreadCount={unreadAnnouncements}
-                        onBellClick={markAnnouncementsAsRead}
-                        announcements={announcements}
-                        onAddAnnouncement={handleAddAnnouncement}
-                        onDeleteAnnouncement={handleDeleteAnnouncement}
-                    />
-                    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                        {renderPage()}
-                        <div className="h-20 md:hidden" />
-                    </div>
-                </main>
-                <ConfirmationModal 
-                    isOpen={showDeletionConfirmation}
-                    onClose={() => setShowDeletionConfirmation(false)}
-                    onConfirm={executeDeletion}
-                    title="Confirm Action"
-                    message="Are you sure you want to proceed with this action? This cannot be undone."
-                />
-            </div>
+            
+            {!user ? (
+                <LoginScreen onLogin={handleLogin} />
+            ) : (
+                (() => {
+                    const loggedInUserDetails = { ...user, ...users.find(u => u.id === user.uid) };
+                    return (
+                        <div className="flex h-screen bg-gray-100 font-sans">
+                            <Sidebar user={loggedInUserDetails} onNavigate={setPage} onLogout={handleLogout} currentPage={page} />
+                            <main className="flex-1 flex flex-col overflow-hidden">
+                                <Header
+                                    user={loggedInUserDetails}
+                                    onLogout={handleLogout}
+                                    unreadCount={unreadAnnouncements}
+                                    onBellClick={markAnnouncementsAsRead}
+                                    announcements={announcements}
+                                    onAddAnnouncement={handleAddAnnouncement}
+                                    onDeleteAnnouncement={handleDeleteAnnouncement}
+                                />
+                                <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+                                    {renderPage()}
+                                    <div className="h-20 md:hidden" />
+                                </div>
+                            </main>
+                            <ConfirmationModal 
+                                isOpen={showDeletionConfirmation}
+                                onClose={() => setShowDeletionConfirmation(false)}
+                                onConfirm={executeDeletion}
+                                title="Confirm Action"
+                                message="Are you sure you want to proceed with this action? This cannot be undone."
+                            />
+                        </div>
+                    );
+                })()
+            )}
         </>
     );
+    // --- End of Fix ---
 };

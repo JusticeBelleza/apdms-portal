@@ -17,6 +17,7 @@ const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, cur
                 password: '',
                 confirmPassword: '',
                 facilityName: user.facilityName,
+                facilityId: user.facilityId, // Ensure existing facilityId is carried over
                 role: user.role,
                 assignedPrograms: user.assignedPrograms || []
             };
@@ -36,6 +37,7 @@ const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, cur
                 password: '',
                 confirmPassword: '',
                 facilityName: initialFacility,
+                facilityId: null, // Initialize facilityId
                 role: initialRole,
                 assignedPrograms: []
             };
@@ -80,7 +82,25 @@ const UserFormModal = ({ title, user, onClose, onSave, facilities, programs, cur
             alert('Password field cannot be empty for new users.');
             return;
         }
-        onSave(formData);
+
+        // --- Start of Fix ---
+        // Create a copy of the form data to be saved.
+        const dataToSave = { ...formData };
+
+        // If the role is facility-related, find the corresponding facilityId.
+        if (dataToSave.facilityName) {
+            const selectedFacility = facilities.find(facility => facility.name === dataToSave.facilityName);
+            if (selectedFacility) {
+                dataToSave.facilityId = selectedFacility.id;
+            } else {
+                 // Handle case where facility might not be found, though this is unlikely with a dropdown.
+                alert('Selected facility is not valid.');
+                return;
+            }
+        }
+        // --- End of Fix ---
+        
+        onSave(dataToSave);
     };
 
     const renderRoleOptions = () => {

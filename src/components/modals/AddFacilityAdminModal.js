@@ -37,12 +37,24 @@ const AddFacilityAdminModal = ({ onClose, facilities }) => {
 
             const userCredential = await createUserWithEmailAndPassword(tempAuth, formData.email, formData.password);
             const newUser = userCredential.user;
+            
+            // --- Start of Fix ---
+            // Find the selected facility object from the facilities prop
+            const selectedFacility = facilities.find(facility => facility.name === formData.facilityName);
+
+            if (!selectedFacility) {
+                alert('Could not find the selected facility. Please try again.');
+                return;
+            }
+            // --- End of Fix ---
 
             await setDoc(doc(db, "users", newUser.uid), {
                 id: newUser.uid,
                 name: `${formData.facilityName} Admin`,
                 email: formData.email,
                 facilityName: formData.facilityName,
+                // --- Add facilityId to the user document ---
+                facilityId: selectedFacility.id, 
                 role: 'Facility Admin',
                 assignedPrograms: [],
                 isActive: true
