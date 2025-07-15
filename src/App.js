@@ -241,30 +241,51 @@ const Sidebar = ({ user, onNavigate, onLogout, currentPage }) => {
     );
 };
 
-const Header = ({ user, onLogout, unreadCount, onBellClick }) => (
-    <header className="flex items-center justify-between h-auto md:h-20 p-2 sm:p-4 bg-white border-b">
-        <div>
-            <h2 className="text-base sm:text-lg font-semibold text-gray-800 truncate">Welcome, {user.name}!</h2>
-            <p className="text-xs sm:text-sm text-gray-500">
-                <span className="hidden sm:inline">{user.facilityName} - </span>
-                <span>{user.role}</span>
-            </p>
-            <div className="flex items-center text-xs text-gray-500 mt-1">
-                <Calendar className="w-4 h-4 mr-1.5" />
-                <span>Morbidity Week: {getMorbidityWeek()}</span>
+const Header = ({ user, onLogout, unreadCount, onBellClick, announcements, onAddAnnouncement, onDeleteAnnouncement }) => {
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+
+    const handleToggleDropdown = () => {
+        if (!isDropdownOpen && unreadCount > 0) {
+            onBellClick(); // This marks announcements as read
+        }
+        setIsDropdownOpen(prev => !prev);
+    };
+
+    return (
+        <header className="flex items-center justify-between h-auto md:h-20 p-2 sm:p-4 bg-white border-b relative z-30">
+            <div>
+                <h2 className="text-base sm:text-lg font-semibold text-gray-800 truncate">Welcome, {user.name}!</h2>
+                <p className="text-xs sm:text-sm text-gray-500">
+                    <span className="hidden sm:inline">{user.facilityName} - </span>
+                    <span>{user.role}</span>
+                </p>
+                <div className="flex items-center text-xs text-gray-500 mt-1">
+                    <Calendar className="w-4 h-4 mr-1.5" />
+                    <span>Morbidity Week: {getMorbidityWeek()}</span>
+                </div>
             </div>
-        </div>
-        <div className="flex items-center space-x-1 sm:space-x-2">
-            <button onClick={onBellClick} className="relative p-2 rounded-full hover:bg-gray-200">
-                <Bell className="w-5 h-5 sm:w-6 sm:h-6 text-gray-600" />
-                {unreadCount > 0 && (
-                    <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"></span>
-                )}
-            </button>
-            <button onClick={onLogout} className="p-2 rounded-full hover:bg-gray-200 md:hidden"><LogOut className="w-5 h-5 text-gray-600" /></button>
-        </div>
-    </header>
-);
+            <div className="flex items-center space-x-1 sm:space-x-2">
+                <div className="relative">
+                    <button onClick={handleToggleDropdown} className="relative p-2 rounded-full hover:bg-gray-200">
+                        <Bell className="w-5 h-5 sm:w-6 sm:h-6 text-gray-600" />
+                        {unreadCount > 0 && (
+                            <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"></span>
+                        )}
+                    </button>
+                    <NotificationDropdown
+                        isOpen={isDropdownOpen}
+                        onClose={() => setIsDropdownOpen(false)}
+                        announcements={announcements}
+                        user={user}
+                        onSave={onAddAnnouncement}
+                        onDelete={onDeleteAnnouncement}
+                    />
+                </div>
+                <button onClick={onLogout} className="p-2 rounded-full hover:bg-gray-200 md:hidden"><LogOut className="w-5 h-5 text-gray-600" /></button>
+            </div>
+        </header>
+    );
+};
 
 const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message }) => {
     if (!isOpen) return null;
@@ -1834,9 +1855,26 @@ const UploadModal = ({ program, onClose, onFileUpload }) => {
     );
 };
 
-const AnnouncementModal = ({ onClose, onSave, announcements, userRole, onDelete }) => {
+const NotificationDropdown = ({ isOpen, onClose, announcements, user, onSave, onDelete }) => {
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
+    const dropdownRef = useRef(null);
+
+    // Effect to handle clicks outside the dropdown to close it
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target) && !event.target.closest('button > svg.lucide-bell')) {
+                onClose();
+            }
+        };
+        if (isOpen) {
+            document.addEventListener("mousedown", handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [isOpen, onClose]);
+
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -1850,42 +1888,44 @@ const AnnouncementModal = ({ onClose, onSave, announcements, userRole, onDelete 
     };
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 relative">
-                <button onClick={onClose} className="absolute top-3 right-3 p-1 rounded-full hover:bg-gray-200"><X className="w-5 h-5 text-gray-600"/></button>
-                <h2 className="text-xl font-bold text-gray-800 mb-4">Notifications</h2>
-                <div className="space-y-4 max-h-96 overflow-y-auto">
-                    {announcements.map(ann => (
-                        <div key={ann.id} className="bg-gray-50 p-4 rounded-lg relative">
-                             <p className="font-bold">{ann.title}</p>
-                             <p className="text-gray-700">{ann.message}</p>
-                             <p className="text-xs mt-1 text-gray-500">Posted by {ann.author} on: {new Date(ann.timestamp?.toDate()).toLocaleString()}</p>
-                             {userRole === 'Super Admin' && (
-                                <button onClick={() => onDelete(ann.id)} className="absolute top-2 right-2 p-1 text-red-500 hover:text-red-700">
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                             )}
-                        </div>
-                    ))}
-                    {announcements.length === 0 && <p className="text-center text-gray-500">No new announcements.</p>}
-                </div>
-                 {userRole === 'Super Admin' && (
-                    <form onSubmit={handleSubmit} className="space-y-4 mt-6 border-t pt-4">
-                        <h3 className="text-lg font-semibold">Create New Announcement</h3>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Title</label>
-                            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Message</label>
-                            <textarea value={message} onChange={(e) => setMessage(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" rows="3" required></textarea>
-                        </div>
-                        <div className="text-right">
-                            <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Post Announcement</button>
-                        </div>
-                    </form>
-                 )}
+        <div 
+            ref={dropdownRef} 
+            className={`absolute top-full right-0 mt-2 w-80 md:w-96 bg-white rounded-lg shadow-2xl border transition-all duration-300 ease-in-out ${isOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'}`}
+        >
+            <div className="p-3 border-b">
+                 <h2 className="text-lg font-bold text-gray-800">Notifications</h2>
             </div>
+            <div className="space-y-2 max-h-80 overflow-y-auto p-3">
+                {announcements.map(ann => (
+                    <div key={ann.id} className="bg-gray-50 p-3 rounded-lg relative hover:bg-gray-100">
+                         <p className="font-semibold text-sm">{ann.title}</p>
+                         <p className="text-gray-700 text-sm">{ann.message}</p>
+                         <p className="text-xs mt-1 text-gray-500">
+                             {ann.author} - {new Date(ann.timestamp?.toDate()).toLocaleDateString()}
+                         </p>
+                         {user.role === 'Super Admin' && (
+                            <button onClick={() => onDelete(ann.id)} className="absolute top-1 right-1 p-1 text-red-500 hover:text-red-700 rounded-full hover:bg-red-100">
+                                <Trash2 className="w-3 h-3" />
+                            </button>
+                         )}
+                    </div>
+                ))}
+                {announcements.length === 0 && <p className="text-center text-gray-500 py-4">No new announcements.</p>}
+            </div>
+             {user.role === 'Super Admin' && (
+                <form onSubmit={handleSubmit} className="space-y-3 p-3 border-t">
+                    <h3 className="text-md font-semibold">New Announcement</h3>
+                    <div>
+                        <input type="text" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1 block w-full text-sm py-1 px-2 border border-gray-300 rounded-md shadow-sm" required />
+                    </div>
+                    <div>
+                        <textarea placeholder="Message..." value={message} onChange={(e) => setMessage(e.target.value)} className="mt-1 block w-full text-sm py-1 px-2 border border-gray-300 rounded-md shadow-sm" rows="2" required></textarea>
+                    </div>
+                    <div className="text-right">
+                        <button type="submit" className="px-3 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">Post</button>
+                    </div>
+                </form>
+             )}
         </div>
     );
 };
@@ -1951,7 +1991,7 @@ const AuditLogPage = ({ db }) => {
     );
 };
 
-const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
+const DatabankPage = ({ user, submissions, programs, facilities, db, onSuperAdminDelete }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedProgram, setSelectedProgram] = useState('');
     const [selectedFacility, setSelectedFacility] = useState('');
@@ -1959,19 +1999,23 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
     const [selectedMonth, setSelectedMonth] = useState('');
 
     const handleRequestDeletion = async (subId) => {
-        if (window.confirm("Are you sure you want to request deletion for this submission? A Super Admin will need to approve it.")) {
-            try {
-                const subDocRef = doc(db, "submissions", subId);
-                await updateDoc(subDocRef, {
-                    deletionRequest: {
-                        requestedBy: user.uid,
-                        requestedByName: user.name,
-                        timestamp: serverTimestamp()
-                    }
-                });
-                alert("Deletion requested. Awaiting Super Admin approval.");
-            } catch (error) {
-                alert(`Error requesting deletion: ${error.message}`);
+        if (user.role === 'Super Admin') {
+            onSuperAdminDelete(subId);
+        } else {
+            if (window.confirm("Are you sure you want to request deletion for this submission? A Super Admin will need to approve it.")) {
+                try {
+                    const subDocRef = doc(db, "submissions", subId);
+                    await updateDoc(subDocRef, {
+                        deletionRequest: {
+                            requestedBy: user.uid,
+                            requestedByName: user.name,
+                            timestamp: serverTimestamp()
+                        }
+                    });
+                    alert("Deletion requested. Awaiting Super Admin approval.");
+                } catch (error) {
+                    alert(`Error requesting deletion: ${error.message}`);
+                }
             }
         }
     };
@@ -2014,7 +2058,8 @@ const DatabankPage = ({ user, submissions, programs, facilities, db }) => {
 
     }, [user, submissions, programs, searchTerm, selectedProgram, selectedFacility, selectedYear, selectedMonth]);
 
-    const programOptions = [...new Set(programs.map(p => p.name))].sort();
+    // FIX: Filter for active programs in the dropdown
+    const programOptions = [...new Set(programs.filter(p => p.active !== false).map(p => p.name))].sort();
     const facilityOptions = [...new Set(facilities.map(f => f.name))].sort();
     const monthOptions = [
         { value: 1, label: 'January' }, { value: 2, label: 'February' }, { value: 3, label: 'March' }, 
@@ -2149,7 +2194,6 @@ export default function App() {
     const [users, setUsers] = useState([]);
     const [submissions, setSubmissions] = useState([]);
     const [announcements, setAnnouncements] = useState([]);
-    const [showAnnouncementsModal, setShowAnnouncementsModal] = useState(false);
     const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
     const [onlineStatuses, setOnlineStatuses] = useState({});
     
@@ -2355,12 +2399,11 @@ export default function App() {
         alert('Deletion denied.');
     };
 
-    const handleBellClick = () => {
-        setShowAnnouncementsModal(true);
+    const markAnnouncementsAsRead = () => {
         const announcementIds = announcements.map(ann => ann.id);
         localStorage.setItem('seenAnnouncements', JSON.stringify(announcementIds));
         setUnreadAnnouncements(0);
-    }
+    };
 
     if (loading) return <LoadingScreen />;
     if (!user) return <LoginScreen onLogin={handleLogin} />;
@@ -2371,6 +2414,11 @@ export default function App() {
     const programsForUser = (user.role === 'PHO Admin' && loggedInUserDetails)
         ? activePrograms.filter(p => loggedInUserDetails.assignedPrograms.includes(p.id))
         : activePrograms;
+    
+    const handleSuperAdminDeletionRequest = (subId) => {
+        setDeletionInfo({ subId, action: 'approve' });
+        setShowDeletionConfirmation(true);
+    };
 
     const renderPage = () => {
         switch(page) {
@@ -2378,12 +2426,12 @@ export default function App() {
                 if (user.role === 'Facility User') return <FacilityDashboard user={loggedInUserDetails} allPrograms={activePrograms} submissions={submissions} setSubmissions={setSubmissions} db={db} />;
                 if (user.role === 'PHO Admin') return <PhoAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} onDeny={handleDenySubmission} />;
                 if (user.role === 'Facility Admin') return <FacilityAdminDashboard user={user} programs={programs} submissions={submissions} users={users} onlineStatuses={onlineStatuses}/>;
-                return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={user} announcements={announcements} onAddAnnouncement={() => setShowAnnouncementsModal(true)} onDeleteAnnouncement={handleDeleteAnnouncement} onApproveDeletion={handleApproveDeletion} onDenyDeletion={handleDenyDeletion} onNavigate={setPage} />;
+                return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={user} announcements={announcements} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onApproveDeletion={handleApproveDeletion} onDenyDeletion={handleDenyDeletion} onNavigate={setPage} />;
             case 'reports':
                 if (user.permissions?.canExportData) return <ReportsPage programs={programsForUser} submissions={submissions} users={users} user={user} />;
                 break;
             case 'databank':
-                return <DatabankPage user={user} submissions={submissions} programs={programs} facilities={facilities} db={db} />;
+                return <DatabankPage user={user} submissions={submissions} programs={programs} facilities={facilities} db={db} onSuperAdminDelete={handleSuperAdminDeletionRequest} />;
                 break;
             case 'facilities':
                 if (user.permissions?.canManageFacilities) return <FacilityManagementPage user={user} facilities={facilities} db={db} />;
@@ -2415,13 +2463,20 @@ export default function App() {
         <div className="flex h-screen bg-background font-sans">
             <Sidebar user={user} onNavigate={setPage} onLogout={handleLogout} currentPage={page} />
             <main className="flex-1 flex flex-col overflow-hidden">
-                <Header user={user} onLogout={handleLogout} unreadCount={unreadAnnouncements} onBellClick={handleBellClick} />
+                 <Header
+                    user={user}
+                    onLogout={handleLogout}
+                    unreadCount={unreadAnnouncements}
+                    onBellClick={markAnnouncementsAsRead}
+                    announcements={announcements}
+                    onAddAnnouncement={handleAddAnnouncement}
+                    onDeleteAnnouncement={handleDeleteAnnouncement}
+                />
                 <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
                     {renderPage()}
                     <div className="h-20 md:hidden" />
                 </div>
             </main>
-            {showAnnouncementsModal && <AnnouncementModal onClose={() => setShowAnnouncementsModal(false)} onSave={handleAddAnnouncement} announcements={announcements} userRole={user.role} onDelete={handleDeleteAnnouncement} />}
             <ConfirmationModal 
                 isOpen={showDeletionConfirmation}
                 onClose={() => setShowDeletionConfirmation(false)}
