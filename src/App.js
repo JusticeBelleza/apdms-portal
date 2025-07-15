@@ -1,3 +1,5 @@
+// src/App.js
+
 import React, { useState, useEffect } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -34,7 +36,6 @@ import SubmissionsHistory from './pages/SubmissionsHistory';
 import ProfilePage from './pages/ProfilePage';
 import AuditLogPage from './pages/AuditLogPage';
 import DeletionRequestsPage from './pages/DeletionRequestsPage';
-import PermissionsManagement from './pages/PermissionsManagement';
 
 export default function App() {
     const [user, setUser] = useState(null);
@@ -77,7 +78,13 @@ export default function App() {
                         permissions = { canManageUsers: true, canManageFacilities: true, canManagePrograms: true, canManagePermissions: true, canViewAuditLog: true, canExportData: true, canConfirmSubmissions: true };
                      }
 
-                     setUser({ uid: firebaseUser.uid, ...userData, permissions });
+                     // *** CHANGE #1: Get seenAnnouncements from the user's document ***
+                     setUser({ 
+                         uid: firebaseUser.uid, 
+                         ...userData, 
+                         permissions, 
+                         seenAnnouncements: userData.seenAnnouncements || [] // Default to an empty array
+                    });
 
                 } else {
                     console.error("No user document found in Firestore for this authenticated user. Signing out.");
@@ -91,6 +98,17 @@ export default function App() {
 
         return () => unsubscribe();
     }, []);
+
+    // *** CHANGE #2: New useEffect to calculate unread count when user or announcements change ***
+    useEffect(() => {
+        if (user && announcements.length > 0) {
+            const seenIds = user.seenAnnouncements || [];
+            const newUnreadCount = announcements.filter(ann => !seenIds.includes(ann.id)).length;
+            setUnreadAnnouncements(newUnreadCount);
+        } else {
+            setUnreadAnnouncements(0);
+        }
+    }, [user, announcements]);
 
     useEffect(() => {
         if (!user) return;
@@ -127,12 +145,9 @@ export default function App() {
             onSnapshot(collection(db, "users"), (snapshot) => setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(collection(db, "facilities"), (snapshot) => setFacilities(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(collection(db, "submissions"), (snapshot) => setSubmissions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
+            // Removed unread count logic from here, as it's now in its own useEffect
             onSnapshot(query(collection(db, "announcements"), orderBy("timestamp", "desc")), (snapshot) => {
-                const announcementsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setAnnouncements(announcementsData);
-                const seenAnnouncements = JSON.parse(localStorage.getItem('seenAnnouncements') || '[]');
-                const newUnreadCount = announcementsData.filter(ann => !seenAnnouncements.includes(ann.id)).length;
-                setUnreadAnnouncements(newUnreadCount);
+                setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
             }),
         ];
     
@@ -155,8 +170,10 @@ export default function App() {
     };
 
     const handleLogout = () => {
-        const userStatusRef = rtdbRef(rtdb, `status/${user.uid}`);
-        set(userStatusRef, false);
+        if(user) {
+            const userStatusRef = rtdbRef(rtdb, `status/${user.uid}`);
+            set(userStatusRef, false);
+        }
         signOut(auth);
         toast.success("You have been logged out.");
         setPage('dashboard');
@@ -227,10 +244,23 @@ export default function App() {
         toast.error('Deletion request denied.');
     };
 
-    const markAnnouncementsAsRead = () => {
+    // *** CHANGE #3: Update Firestore instead of localStorage ***
+    const markAnnouncementsAsRead = async () => {
+        if (!user) return;
+        const userDocRef = doc(db, "users", user.uid);
         const announcementIds = announcements.map(ann => ann.id);
-        localStorage.setItem('seenAnnouncements', JSON.stringify(announcementIds));
-        setUnreadAnnouncements(0);
+        
+        try {
+            // Update the user's document in Firestore
+            await updateDoc(userDocRef, { seenAnnouncements: announcementIds });
+            
+            // Optimistically update the local user state so the UI updates instantly
+            setUser(prevUser => ({ ...prevUser, seenAnnouncements: announcementIds }));
+            setUnreadAnnouncements(0);
+        } catch (err) {
+            console.error("Failed to mark announcements as read:", err);
+            toast.error("Could not save notification status.");
+        }
     };
     
     const handleSuperAdminDeletionRequest = (subId) => {
@@ -280,44 +310,44 @@ export default function App() {
         return <div className="p-6"><h1 className="text-2xl font-bold text-red-600">Access Denied</h1><p>You do not have permission to view this page.</p></div>;
     };
 
+    if (loading) {
+        return <LoadingScreen />;
+    }
 
-    // --- THE MAIN RETURN LOGIC IS RESTRUCTURED HERE ---
+    if (!user) {
+        return <LoginScreen onLogin={handleLogin} />;
+    }
+
+    const loggedInUserDetails = { ...user, ...users.find(u => u.id === user.uid) };
+
     return (
         <>
-            {/* The Toaster is now at the top level, so it's always available */}
             <Toaster position="top-center" reverseOrder={false} />
-
-            {loading ? (
-                <LoadingScreen />
-            ) : !user ? (
-                <LoginScreen onLogin={handleLogin} />
-            ) : (
-                <div className="flex h-screen bg-gray-100 font-sans">
-                    <Sidebar user={{ ...user, ...users.find(u => u.id === user.uid) }} onNavigate={setPage} onLogout={handleLogout} currentPage={page} />
-                    <main className="flex-1 flex flex-col overflow-hidden">
-                        <Header
-                            user={{ ...user, ...users.find(u => u.id === user.uid) }}
-                            onLogout={handleLogout}
-                            unreadCount={unreadAnnouncements}
-                            onBellClick={markAnnouncementsAsRead}
-                            announcements={announcements}
-                            onAddAnnouncement={handleAddAnnouncement}
-                            onDeleteAnnouncement={handleDeleteAnnouncement}
-                        />
-                        <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                            {renderPage()}
-                            <div className="h-20 md:hidden" /> {/* Spacer for mobile bottom nav */}
-                        </div>
-                    </main>
-                    <ConfirmationModal 
-                        isOpen={showDeletionConfirmation}
-                        onClose={() => setShowDeletionConfirmation(false)}
-                        onConfirm={executeDeletion}
-                        title="Confirm Action"
-                        message="Are you sure you want to proceed with this action? This cannot be undone."
+            <div className="flex h-screen bg-gray-100 font-sans">
+                <Sidebar user={loggedInUserDetails} onNavigate={setPage} onLogout={handleLogout} currentPage={page} />
+                <main className="flex-1 flex flex-col overflow-hidden">
+                    <Header
+                        user={loggedInUserDetails}
+                        onLogout={handleLogout}
+                        unreadCount={unreadAnnouncements}
+                        onBellClick={markAnnouncementsAsRead}
+                        announcements={announcements}
+                        onAddAnnouncement={handleAddAnnouncement}
+                        onDeleteAnnouncement={handleDeleteAnnouncement}
                     />
-                </div>
-            )}
+                    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+                        {renderPage()}
+                        <div className="h-20 md:hidden" />
+                    </div>
+                </main>
+                <ConfirmationModal 
+                    isOpen={showDeletionConfirmation}
+                    onClose={() => setShowDeletionConfirmation(false)}
+                    onConfirm={executeDeletion}
+                    title="Confirm Action"
+                    message="Are you sure you want to proceed with this action? This cannot be undone."
+                />
+            </div>
         </>
     );
 };

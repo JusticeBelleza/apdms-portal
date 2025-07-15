@@ -1,11 +1,13 @@
 // src/components/layout/NotificationDropdown.js
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import { Trash2 } from 'lucide-react';
+import { UserContext } from '../../context/UserContext';
 
-const NotificationDropdown = ({ isOpen, onClose, announcements, user, onSave, onDelete }) => {
+const NotificationDropdown = ({ isOpen, onClose, announcements, onSave, onDelete }) => {
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
     const dropdownRef = useRef(null);
+    const { user } = useContext(UserContext);
 
     // Effect to handle clicks outside the dropdown to close it
     useEffect(() => {
@@ -33,6 +35,10 @@ const NotificationDropdown = ({ isOpen, onClose, announcements, user, onSave, on
         setTitle('');
         setMessage('');
     };
+
+    if (!user) {
+        return null; // Don't render anything if there is no user
+    }
 
     return (
         <div

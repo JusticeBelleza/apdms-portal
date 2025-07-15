@@ -1,0 +1,89 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // HELPER FUNCTIONS
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function getRequestingUserData() {
+      return getUserData(request.auth.uid);
+    }
+
+    function isSuperAdmin() {
+      return getRequestingUserData().role == 'Super Admin';
+    }
+
+    function hasPermission(permission) {
+      // Super Admins have all permissions implicitly.
+      // For other roles, check the permissions document.
+      return isSuperAdmin() || get(/databases/$(database)/documents/permissions/$(getRequestingUserData().role)).data[permission] == true;
+    }
+
+
+    // USERS
+    // Users can update their own data.
+    // Only users with 'canManageUsers' permission can create, update, or delete other users.
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow update: if isSignedIn() && (request.auth.uid == userId || hasPermission('canManageUsers'));
+      allow create, delete: if isSignedIn() && hasPermission('canManageUsers');
+    }
+
+    // FACILITIES
+    // All signed-in users can read the facility list.
+    // Only users with 'canManageFacilities' can write.
+    match /facilities/{facilityId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && hasPermission('canManageFacilities');
+    }
+
+    // PROGRAMS
+    // All signed-in users can read the program list.
+    // Only users with 'canManagePrograms' can write.
+    match /programs/{programId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && hasPermission('canManagePrograms');
+    }
+
+    // SUBMISSIONS
+    // Users can create submissions.
+    // Users can only update submissions linked to their own facility.
+    // Users with 'canConfirmSubmissions' permission can update any submission.
+    // Only Super Admins can delete submissions.
+    match /submissions/{submissionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (hasPermission('canConfirmSubmissions') || getRequestingUserData().facilityId == resource.data.facilityId);
+      allow delete: if isSignedIn() && isSuperAdmin();
+    }
+
+    // ANNOUNCEMENTS
+    // All signed-in users can read.
+    // Only Super Admins can create and delete.
+    match /announcements/{announcementId} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && isSuperAdmin();
+    }
+
+    // AUDIT LOG
+    // Only users with 'canViewAuditLog' can read.
+    // Writes should be handled by secure server functions, but we allow client writes for simplicity.
+    match /audit_log/{logId} {
+        allow read: if isSignedIn() && hasPermission('canViewAuditLog');
+        allow write: if isSignedIn();
+    }
+
+    // PERMISSIONS
+    // Only users with 'canManagePermissions' can read or write.
+    match /permissions/{roleId} {
+        allow read, write: if isSignedIn() && hasPermission('canManagePermissions');
+    }
+  }
+}

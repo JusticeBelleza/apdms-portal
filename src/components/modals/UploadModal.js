@@ -11,7 +11,14 @@ const UploadModal = ({ program, onClose, onFileUpload }) => {
     const handleFileChange = (e) => { if (e.target.files && e.target.files[0]) { setFile(e.target.files[0]); } };
     const handleDragEvents = (e, isDragging) => { e.preventDefault(); e.stopPropagation(); setDragging(isDragging); };
     const handleDrop = (e) => { handleDragEvents(e, false); if (e.dataTransfer.files && e.dataTransfer.files[0]) { setFile(e.dataTransfer.files[0]); } };
-    const handleSubmit = () => { if (file) { onFileUpload(file, morbidityWeek); } };
+    
+    // Updated handleSubmit function
+    const handleSubmit = () => {
+        if (file) {
+            onFileUpload(file, morbidityWeek);
+            onClose(); // Close the modal immediately after starting the upload
+        }
+    };
     
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 relative"><button onClick={onClose} className="absolute top-3 right-3 p-1 rounded-full hover:bg-gray-200"><X className="w-5 h-5 text-gray-600"/></button><h2 className="text-xl font-bold text-gray-800 mb-2">Upload Report</h2><p className="text-gray-600 mb-4">Submitting for: <span className="font-semibold">{program.name}</span></p>

@@ -11,5 +11,11 @@
         "*.local"
       ]
     }
-  ]
+  ],
+  "firestore": {
+    "database": "(default)",
+    "location": "asia-southeast1",
+    "rules": "firebase deploy --only firestore:rules",
+    "indexes": "firebase deploy --only firestore:indexes"
+  }
 }

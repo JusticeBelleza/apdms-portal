@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import toast from 'react-hot-toast';
+import toast from 'react-hot-toast'; // Make sure toast is imported
 import { logAudit, exportToCSV } from '../utils/helpers';
 import { setDoc, doc, deleteDoc } from 'firebase/firestore';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
@@ -46,6 +46,7 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
 
 
     const handleAddUser = async (newUser) => {
+        const toastId = toast.loading('Creating user...'); // Start loading toast
         try {
             const tempAuth = getAuth(initializeApp(auth.app.options, `secondary-auth-${Date.now()}`));
             const userCredential = await createUserWithEmailAndPassword(tempAuth, newUser.email, newUser.password);
@@ -60,20 +61,25 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
                 isActive: true
             });
             await logAudit(db, currentUser, "Create User", { newUserName: newUser.name, newUserRole: newUser.role });
-            toast.success('User added successfully.');
+            toast.success('User added successfully.', { id: toastId }); // Success toast
             setShowAddModal(false);
         } catch (error) {
-            toast.error(`Error adding user: ${error.message}`);
+            toast.error(`Error adding user: ${error.message}`, { id: toastId }); // Error toast
         }
     };
 
     const handleEditUser = async (updatedUser) => {
-        const userDocRef = doc(db, "users", updatedUser.id);
-        await setDoc(userDocRef, updatedUser, { merge: true });
-        await logAudit(db, currentUser, "Edit User", { targetUserName: updatedUser.name });
-        toast.success("User updated successfully.");
-        setShowEditModal(false);
-        setEditingUser(null);
+        const toastId = toast.loading('Updating user...'); // Start loading toast
+        try {
+            const userDocRef = doc(db, "users", updatedUser.id);
+            await setDoc(userDocRef, updatedUser, { merge: true });
+            await logAudit(db, currentUser, "Edit User", { targetUserName: updatedUser.name });
+            toast.success("User updated successfully.", { id: toastId }); // Success toast
+            setShowEditModal(false);
+            setEditingUser(null);
+        } catch (error) {
+            toast.error(`Error updating user: ${error.message}`, { id: toastId }); // Error toast
+        }
     };
 
     const openEditModal = (user) => {
@@ -90,10 +96,11 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     const confirmDeleteUser = async () => {
         if (!userToDelete) return;
 
-        const { id, email } = userToDelete;
+        const toastId = toast.loading('Deleting user...'); // Start loading toast
+        const { id } = userToDelete;
         const firebaseUser = auth.currentUser;
         if (!firebaseUser) {
-            return toast.error("Error: You must be logged in to perform this action.");
+            return toast.error("Error: You must be logged in to perform this action.", { id: toastId });
         }
 
         try {
@@ -112,12 +119,13 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
             }
 
             const result = await response.json();
-            await deleteDoc(doc(db, "users", id));
+            // The Cloud Function deletes the user from Firestore now.
+            // await deleteDoc(doc(db, "users", id)); 
             await logAudit(db, currentUser, "Permanently Delete User", { targetUserId: id });
-            toast.success(result.data.message || 'User successfully deleted.');
+            toast.success(result.data.message || 'User successfully deleted.', { id: toastId }); // Success toast
         } catch (error) {
             console.error("Error deleting user:", error);
-            toast.error(`An error occurred while deleting the user: ${error.message}`);
+            toast.error(`An error occurred: ${error.message}`, { id: toastId }); // Error toast
         } finally {
             setShowConfirmModal(false);
             setUserToDelete(null);
@@ -125,10 +133,15 @@ const UserManagementPage = ({ users, facilities, programs, currentUser, auth, db
     };
 
     const handleToggleUserStatus = async (user, isActive) => {
-        const userDocRef = doc(db, "users", user.id);
-        await setDoc(userDocRef, { isActive: !isActive }, { merge: true });
-        await logAudit(db, currentUser, isActive ? "Deactivate User" : "Activate User", { targetUserName: user.name });
-        toast.success(`User has been ${isActive ? "deactivated" : "activated"}.`);
+        const toastId = toast.loading(isActive ? "Deactivating user..." : "Activating user..."); // Start loading toast
+        try {
+            const userDocRef = doc(db, "users", user.id);
+            await setDoc(userDocRef, { isActive: !isActive }, { merge: true });
+            await logAudit(db, currentUser, isActive ? "Deactivate User" : "Activate User", { targetUserName: user.name });
+            toast.success(`User has been ${isActive ? "deactivated" : "activated"}.`, { id: toastId }); // Success toast
+        } catch(error) {
+            toast.error(`Failed to update status: ${error.message}`, { id: toastId }); // Error toast
+        }
     };
 
     const handleExport = () => {

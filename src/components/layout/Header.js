@@ -2,14 +2,14 @@
 import React, { useState } from 'react';
 import { Bell, LogOut, Calendar } from 'lucide-react';
 import { getMorbidityWeek } from '../../utils/helpers';
-import NotificationDropdown from './NotificationDropdown'; // We will create this next
+import NotificationDropdown from './NotificationDropdown';
 
 const Header = ({ user, onLogout, unreadCount, onBellClick, announcements, onAddAnnouncement, onDeleteAnnouncement }) => {
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
     const handleToggleDropdown = () => {
         if (!isDropdownOpen && unreadCount > 0) {
-            onBellClick(); // This marks announcements as read
+            onBellClick();
         }
         setIsDropdownOpen(prev => !prev);
     };
