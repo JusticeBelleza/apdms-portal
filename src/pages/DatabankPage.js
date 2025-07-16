@@ -51,7 +51,8 @@ const DatabankPage = ({ user, submissions, programs, facilities, db, onSuperAdmi
             subs = subs.filter(s => 
                 s.programName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 s.facilityName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                s.uploaderName.toLowerCase().includes(searchTerm.toLowerCase())
+                // --- FIX: Use submittedByName, which exists in the data ---
+                (s.submittedByName && s.submittedByName.toLowerCase().includes(searchTerm.toLowerCase()))
             );
         }
         if (selectedProgram) {
@@ -61,13 +62,16 @@ const DatabankPage = ({ user, submissions, programs, facilities, db, onSuperAdmi
             subs = subs.filter(s => s.facilityName === selectedFacility);
         }
         if (selectedYear) {
-            subs = subs.filter(s => new Date(s.submissionDate).getFullYear() === selectedYear);
+            // --- FIX: Add a check to ensure submissionDate exists ---
+            subs = subs.filter(s => s.submissionDate && new Date(s.submissionDate).getFullYear() === selectedYear);
         }
         if (selectedMonth) {
-            subs = subs.filter(s => (new Date(s.submissionDate).getMonth() + 1) === parseInt(selectedMonth));
+            // --- FIX: Add a check to ensure submissionDate exists ---
+            subs = subs.filter(s => s.submissionDate && (new Date(s.submissionDate).getMonth() + 1) === parseInt(selectedMonth));
         }
         
-        return subs.sort((a,b) => new Date(b.submissionDate) - new Date(a.submissionDate));
+        // --- FIX: Add a check for valid dates before sorting ---
+        return subs.sort((a,b) => (b.submissionDate && a.submissionDate) ? new Date(b.submissionDate) - new Date(a.submissionDate) : 0);
 
     }, [user, submissions, programs, searchTerm, selectedProgram, selectedFacility, selectedYear, selectedMonth]);
 
@@ -81,7 +85,7 @@ const DatabankPage = ({ user, submissions, programs, facilities, db, onSuperAdmi
     ];
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 p-4 md:p-6 lg:p-8">
             <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Databank</h1>
             <div className="bg-white p-6 rounded-lg shadow-md">
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
@@ -124,16 +128,20 @@ const DatabankPage = ({ user, submissions, programs, facilities, db, onSuperAdmi
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {filteredSubmissions.map(sub => (
+                            {filteredSubmissions.length > 0 ? filteredSubmissions.map(sub => (
                                 <tr key={sub.id}>
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.programName}</td>
                                     <td className="px-6 py-4 whitespace-nowrap">{sub.facilityName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{sub.uploaderName}</td>
+                                    {/* --- FIX: Use submittedByName, which exists in the data --- */}
+                                    <td className="px-6 py-4 whitespace-nowrap">{sub.submittedByName}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 flex items-center">
                                         {getFileIcon(sub.fileName)}
                                         <span className="ml-2">{sub.fileName}</span>
                                     </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(sub.submissionDate).toLocaleString()}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        {/* --- FIX: Add a check to ensure submissionDate exists before displaying --- */}
+                                        {sub.submissionDate ? new Date(sub.submissionDate).toLocaleString() : 'N/A'}
+                                    </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-right space-x-2">
                                         <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-secondary inline-block">
                                             <Download className="w-5 h-5"/>
@@ -145,7 +153,13 @@ const DatabankPage = ({ user, submissions, programs, facilities, db, onSuperAdmi
                                         )}
                                     </td>
                                 </tr>
-                            ))}
+                            )) : (
+                                <tr>
+                                    <td colSpan="6" className="text-center py-10 text-gray-500">
+                                        No submissions found matching your criteria.
+                                    </td>
+                                </tr>
+                            )}
                         </tbody>
                     </table>
                 </div>

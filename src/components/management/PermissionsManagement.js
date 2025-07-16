@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { doc, getDoc, writeBatch } from 'firebase/firestore';
 import { ShieldCheck } from 'lucide-react';
-import ConfirmationModal from '../components/modals/ConfirmationModal'; // <-- THIS IS THE CORRECTED PATH
+import ConfirmationModal from '../components/modals/ConfirmationModal';
 
 // Moved constants outside the component to fix the dependency warning
 const ROLES = ['PHO Admin', 'Facility Admin', 'Viewer', 'Facility User'];

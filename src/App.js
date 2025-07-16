@@ -1,7 +1,6 @@
-
 // src/App.js
 
-import React, { useState, useEffect, useRef } from 'react'; // Import useRef
+import React, { useState, useEffect, useRef } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 
 // Firebase and Auth
@@ -347,10 +346,6 @@ export default function App() {
         return <LoadingScreen />;
     }
 
-    // --- Start of Fix ---
-    // The <Toaster /> component is moved to the top level of the return statement.
-    // This ensures it is always rendered and can display notifications
-    // regardless of the user's authentication state.
     return (
         <>
             <Toaster position="top-center" reverseOrder={false} />
@@ -391,5 +386,4 @@ export default function App() {
             )}
         </>
     );
-    // --- End of Fix ---
 };

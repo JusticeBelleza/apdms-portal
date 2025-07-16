@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import toast from 'react-hot-toast'; // <-- THIS LINE WAS MISSING
+import toast from 'react-hot-toast';
 import { collection, query, orderBy, limit, getDocs, startAfter } from 'firebase/firestore';
 import { Search } from 'lucide-react';
 

@@ -1,105 +1,146 @@
-// src/components/dashboards/FacilityAdminDashboard.js
-import React from 'react';
-import { PieChart, Pie, Cell, Tooltip, Legend } from 'recharts';
-import { getStatusForProgram } from '../../utils/helpers';
+import React, { useState, useEffect } from 'react';
+import { Upload } from 'lucide-react';
+import { collection, doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { storage } from '../../firebase/config';
+import UploadModal from '../modals/UploadModal';
+import { getMorbidityWeek } from '../../utils/helpers';
+import toast from 'react-hot-toast';
 
-const FacilityAdminDashboard = ({ user, programs, submissions, users, onlineStatuses }) => {
-    const facilityName = user.facilityName;
-    const facilityUsers = users.filter(u => u.facilityName === facilityName && u.role === 'Facility User');
-    const assignedProgramIds = [...new Set(facilityUsers.flatMap(u => u.assignedPrograms || []))];
-    const facilityPrograms = programs.filter(p => assignedProgramIds.includes(p.id));
+const FacilityDashboard = ({ user, allPrograms, submissions, db }) => {
+    const [facilityPrograms, setFacilityPrograms] = useState([]);
+    const [showUploadModal, setShowUploadModal] = useState(false);
+    const [selectedProgram, setSelectedProgram] = useState(null);
 
-    const complianceData = facilityPrograms.map(p => {
-        const status = getStatusForProgram(facilityName, p, submissions).text;
-        return { name: p.name, status };
-    });
+    useEffect(() => {
+        if (user && user.assignedPrograms && allPrograms.length > 0) {
+            const assignedPrograms = allPrograms.filter(p => user.assignedPrograms.includes(p.id));
+            setFacilityPrograms(assignedPrograms);
+        }
+    }, [user, allPrograms]);
 
-    const statusCounts = complianceData.reduce((acc, curr) => {
-        acc[curr.status] = (acc[curr.status] || 0) + 1;
-        return acc;
-    }, {});
-
-    const pieData = [
-        { name: 'Submitted', value: statusCounts['Submitted'] || 0 },
-        { name: 'Pending', value: (statusCounts['Pending'] || 0) + (statusCounts['Pending Confirmation'] || 0) },
-        { name: 'Overdue', value: statusCounts['Overdue'] || 0 },
-    ];
-
-    const COLORS = {
-        Submitted: '#10b981',
-        Pending: '#f59e0b',
-        Overdue: '#ef4444',
+    const handleUploadClick = (program) => {
+        setSelectedProgram(program);
+        setShowUploadModal(true);
     };
 
+    const handleFileUpload = async (file, morbidityWeek) => {
+        if (!selectedProgram || !user) {
+            toast.error("An unexpected error occurred. Please try again.");
+            return;
+        }
+
+        const toastId = toast.loading('Uploading file...');
+        const isZeroCase = !file;
+        let fileName = '';
+        if (file) {
+            const fileExtension = file.name.split('.').pop();
+            fileName = `${user.facilityName}-${selectedProgram.name}-MW${morbidityWeek}-${Date.now()}.${fileExtension}`;
+        } else {
+            fileName = `Zero-Case-Report-${new Date().getFullYear()}-MW-${morbidityWeek}.pdf`;
+        }
+
+        // This is the unique path for the file in Firebase Storage.
+        const storagePath = `submissions/${user.facilityName}/${selectedProgram.name}/${morbidityWeek}/${fileName}`;
+        const fileRef = storageRef(storage, storagePath);
+        const submissionRef = doc(collection(db, "submissions"));
+
+        try {
+            let fileURL = '';
+            if (file) {
+                await uploadBytes(fileRef, file);
+                fileURL = await getDownloadURL(fileRef);
+            }
+            
+            const submissionData = {
+                facilityId: user.facilityId,
+                facilityName: user.facilityName,
+                programId: selectedProgram.id,
+                programName: selectedProgram.name,
+                morbidityWeek: morbidityWeek,
+                submittedBy: user.uid,
+                submittedByName: user.name,
+                timestamp: serverTimestamp(),
+                submissionDate: new Date().toISOString(), 
+                status: 'For Confirmation',
+                fileURL: fileURL,
+                fileName: fileName,
+                isZeroCase: isZeroCase,
+                // --- THIS LINE IS CRITICAL for the new cloud function to work ---
+                storagePath: storagePath, 
+            };
+            
+            await setDoc(submissionRef, submissionData);
+            
+            toast.success('File uploaded successfully!', { id: toastId });
+            setShowUploadModal(false);
+
+        } catch (error) {
+            console.error("Error uploading file:", error);
+            toast.error('File upload failed. Please try again.', { id: toastId });
+        }
+    };
+    
+    const programSubmissions = (programId, week) => {
+        return submissions.filter(s => s.facilityId === user.facilityId && s.programId === programId && s.morbidityWeek === week);
+    };
+    
+    const currentWeek = getMorbidityWeek();
+
     return (
-        <div className="space-y-6">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">{facilityName} Dashboard</h1>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4 text-gray-700">Facility Compliance</h2>
-                    <div style={{ width: '100%', height: 250 }}>
-                        <PieChart>
-                            <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
-                                {pieData.map((entry, index) => (
-                                    <Cell key={`cell-${index}`} fill={COLORS[entry.name]} />
-                                ))}
-                            </Pie>
-                            <Tooltip />
-                            <Legend />
-                        </PieChart>
-                    </div>
-                </div>
-                <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4 text-gray-700">User Status</h2>
-                    <div className="space-y-3 max-h-80 overflow-y-auto">
-                        {facilityUsers.map(u => (
-                            <div key={u.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-md">
-                                <p className="font-medium">{u.name}</p>
-                                <div className="flex items-center space-x-2">
-                                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${u.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                        {u.isActive ? 'Active' : 'Inactive'}
-                                    </span>
-                                    <span className={`h-3 w-3 rounded-full ${onlineStatuses[u.id] ? 'bg-green-500' : 'bg-gray-400'}`}></span>
-                                </div>
+        <div className="p-4 md:p-6 lg:p-8">
+            <h1 className="text-2xl font-bold text-gray-800 mb-6">Facility Dashboard</h1>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {facilityPrograms.length > 0 ? facilityPrograms.map(program => {
+                    const subs = programSubmissions(program.id, currentWeek);
+                    const isSubmitted = subs.length > 0;
+                    const submissionStatus = isSubmitted ? subs[0].status : 'Not Submitted';
+
+                    return (
+                        <div key={program.id} className="bg-white p-6 rounded-xl shadow-md flex flex-col justify-between">
+                            <div>
+                                <h2 className="text-lg font-bold text-gray-700">{program.name}</h2>
+                                <p className="text-sm text-gray-500 mb-4">{program.description}</p>
                             </div>
-                        ))}
+                            <div className="text-right">
+                                <p className="text-sm font-medium mb-2">
+                                    MW {currentWeek} Status: 
+                                    <span className={`ml-2 px-2 py-1 text-xs rounded-full ${
+                                        submissionStatus === 'Submitted' ? 'bg-green-100 text-green-800' :
+                                        submissionStatus === 'For Confirmation' ? 'bg-yellow-100 text-yellow-800' :
+                                        submissionStatus === 'Rejected' ? 'bg-orange-100 text-orange-800' :
+                                        'bg-red-100 text-red-800'
+                                    }`}>
+                                        {submissionStatus}
+                                    </span>
+                                </p>
+                                <button
+                                    onClick={() => handleUploadClick(program)}
+                                    disabled={isSubmitted && submissionStatus !== 'Rejected'}
+                                    className="flex items-center justify-center w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                >
+                                    <Upload className="w-4 h-4 mr-2" />
+                                    <span>{isSubmitted && submissionStatus !== 'Rejected' ? 'Submitted' : 'Upload Report'}</span>
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }) : (
+                    <div className="col-span-full text-center py-10 bg-white rounded-xl shadow-md">
+                        <p className="text-gray-500">You are not assigned to any programs.</p>
+                        <p className="text-sm text-gray-400 mt-2">Please contact your administrator to get assigned to a program.</p>
                     </div>
-                </div>
+                )}
             </div>
-             <div className="bg-white p-6 rounded-lg shadow-md">
-                <h2 className="text-xl font-semibold mb-4 text-gray-700">Recent Submissions</h2>
-                 <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {submissions.filter(s => s.facilityName === facilityName).slice(0, 5).map(s => {
-                                const program = programs.find(p => p.name === s.programName);
-                                const status = getStatusForProgram(facilityName, program, submissions);
-                                return (
-                                <tr key={s.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap">{s.programName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{s.uploaderName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">{s.submissionDate}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${status.style}`}>
-                                            {status.icon}
-                                            <span className="ml-1.5">{status.text}</span>
-                                        </span>
-                                    </td>
-                                </tr>
-                            )})}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+
+            {showUploadModal && (
+                <UploadModal
+                    program={selectedProgram}
+                    onClose={() => setShowUploadModal(false)}
+                    onFileUpload={handleFileUpload}
+                />
+            )}
         </div>
     );
 };
-export default FacilityAdminDashboard;
+export default FacilityDashboard;
