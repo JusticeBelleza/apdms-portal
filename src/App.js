@@ -1,5 +1,3 @@
-// src/App.js
-
 import React, { useState, useEffect, useRef } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 
@@ -76,8 +74,19 @@ export default function App() {
                     if (permsDocSnap.exists()) {
                         permissions = permsDocSnap.data();
                     }
+
+                    // **FIXED**: This block ensures the Super Admin user object has all the necessary
+                    // permission flags for the sidebar UI to render correctly.
                     if (userData.role === 'Super Admin') {
-                        permissions = { canManageUsers: true, canManageFacilities: true, canManagePrograms: true, canManagePermissions: true, canViewAuditLog: true, canExportData: true, canConfirmSubmissions: true };
+                        permissions = { 
+                            canManageUsers: true, 
+                            canManageFacilities: true, 
+                            canManagePrograms: true, 
+                            canManagePermissions: true, 
+                            canViewAuditLog: true, 
+                            canExportData: true, 
+                            canConfirmSubmissions: true 
+                        };
                     }
 
                     setUser({ 
@@ -191,8 +200,8 @@ export default function App() {
                     errorMessage = 'The email address is not valid.';
                     break;
                 case 'auth/invalid-credential':
-                     errorMessage = 'Invalid credentials. Please check your email and password.';
-                     break;
+                    errorMessage = 'Invalid credentials. Please check your email and password.';
+                    break;
                 default:
                     errorMessage = 'Login failed. Please try again.';
                     break;
@@ -232,13 +241,46 @@ export default function App() {
         toast.success("Announcement posted!");
     };
     
-    const handleDeleteAnnouncement = async (announcementId) => {
-        if (window.confirm("Are you sure you want to delete this announcement?")) {
-            await deleteDoc(doc(db, "announcements", announcementId));
-            await logAudit(db, user, "Delete Announcement", { announcementId });
-            toast.success("Announcement deleted.");
-        }
-    };
+    const handleDeleteAnnouncement = (announcementId) => {
+        toast((t) => (
+          <div className="flex flex-col items-center gap-2 text-center">
+            <p className="font-bold text-gray-800">
+              Delete this announcement?
+            </p>
+            <p className="text-sm text-gray-600">
+              This action cannot be undone.
+            </p>
+            <div className="flex gap-3 mt-2">
+              <button
+                className="px-4 py-1 bg-red-600 text-white text-sm font-semibold rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                onClick={() => {
+                  // Perform the actual deletion
+                  const deletePromise = deleteDoc(doc(db, "announcements", announcementId));
+                  
+                  toast.promise(deletePromise, {
+                      loading: 'Deleting...',
+                      success: 'Announcement deleted!',
+                      error: 'Could not delete.',
+                  });
+    
+                  logAudit(db, user, "Delete Announcement", { announcementId });
+                  toast.dismiss(t.id); // Close the confirmation toast
+                }}
+              >
+                Confirm Delete
+              </button>
+              <button
+                className="px-4 py-1 bg-gray-200 text-gray-800 text-sm font-semibold rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+                onClick={() => toast.dismiss(t.id)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ), {
+          duration: 6000, // Make the confirmation stay on screen longer
+        });
+      };
 
     const handleDeletionConfirm = (subId, action) => {
         setDeletionInfo({ subId, action });
@@ -327,15 +369,15 @@ export default function App() {
                 if (user.permissions?.canManageUsers) return <UserManagementPage users={users} facilities={facilities} programs={programs} currentUser={loggedInUserDetails} auth={auth} db={db} />;
                 break;
             case 'submissions':
-                 return <SubmissionsHistory user={loggedInUserDetails} submissions={submissions} db={db} />;
+                return <SubmissionsHistory user={loggedInUserDetails} submissions={submissions} db={db} />;
             case 'profile':
                 return <ProfilePage user={loggedInUserDetails} auth={auth} db={db} setUser={setUser} />;
             case 'audit':
                 if (user.permissions?.canViewAuditLog) return <AuditLogPage db={db} />;
                 break;
             case 'deletion-requests':
-                 if (user.role === 'Super Admin') return <DeletionRequestsPage submissions={submissions} onApprove={(subId) => handleDeletionConfirm(subId, 'approve')} onDeny={(subId) => handleDeletionConfirm(subId, 'deny')} />;
-                 break;
+                if (user.role === 'Super Admin') return <DeletionRequestsPage submissions={submissions} onApprove={(subId) => handleDeletionConfirm(subId, 'approve')} onDeny={(subId) => handleDeletionConfirm(subId, 'deny')} />;
+                break;
             default:
                 return <div>Page not found</div>;
         }

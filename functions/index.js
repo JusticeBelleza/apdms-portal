@@ -1,93 +1,93 @@
-// Import v2 functions
-const { onRequest } = require("firebase-functions/v2/https");
-const { onObjectDeleted } = require("firebase-functions/v2/storage");
-const { setGlobalOptions } = require("firebase-functions/v2");
-
+// Import the necessary modules from the Firebase SDK.
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
-const cors = require("cors")({ origin: true });
 
-// Initialize the Admin SDK (only once)
+// Initialize the Admin SDK.
 admin.initializeApp();
-const db = admin.firestore();
-
-// Set global options (e.g., region) if needed
-setGlobalOptions({ region: "us-central1" });
 
 /**
- * Deletes a user from Firebase Auth and their Firestore document.
- * Uses the v2 'onRequest' handler.
+ * Sets a custom role for a user.
+ * This function is protected and can only be called by a 'Super Admin' or 'PHO Admin'.
  */
-exports.deleteUser = onRequest({ cors: true }, async (req, res) => {
-    if (req.method !== 'POST') {
-        return res.status(405).send({ error: 'Method Not Allowed' });
-    }
+exports.setUserRole = onCall(async (request) => {
+  // Ensure the user is authenticated.
+  if (!request.auth) {
+    throw new HttpsError(
+      "unauthenticated",
+      "The function must be called while authenticated."
+    );
+  }
 
-    // TODO: Add robust security to verify the request comes from an admin.
-    
-    const { uid } = req.body;
-    if (!uid) {
-        return res.status(400).send({ error: 'The "uid" property is required.' });
-    }
+  const callerClaims = request.auth.token;
+  // Ensure the user has permission to set roles.
+  if (callerClaims.role !== "Super Admin" && callerClaims.role !== "PHO Admin") {
+    throw new HttpsError(
+      "permission-denied",
+      "You do not have permission to set user roles."
+    );
+  }
 
-    try {
-        try {
-            await admin.auth().deleteUser(uid);
-            console.log(`Successfully deleted user ${uid} from Firebase Authentication.`);
-        } catch (error) {
-            if (error.code === 'auth/user-not-found') {
-                console.log(`User ${uid} not found in Auth. Proceeding with Firestore cleanup.`);
-            } else {
-                throw error;
-            }
-        }
+  // Set custom claims and update the Firestore document.
+  const { uid, role } = request.data;
+  try {
+    await admin.auth().setCustomUserClaims(uid, { role: role });
+    await admin.firestore().collection("users").doc(uid).update({ role: role });
+    return { message: `Success! Role for user ${uid} has been set to ${role}` };
+  } catch (error) {
+    console.error("Error setting user role:", error);
+    throw new HttpsError("internal", "Unable to set user role.");
+  }
+});
 
-        const userDocRef = db.collection('users').doc(uid);
-        await userDocRef.delete();
-        console.log(`Successfully deleted user document ${uid} from Firestore.`);
+/**
+ * Deletes a user from Authentication and Firestore.
+ * This function is protected and can only be called by a 'Super Admin' or 'PHO Admin'.
+ */
+exports.deleteUser = onCall(async (request) => {
+  // Ensure the user is authenticated.
+  if (!request.auth) {
+    throw new HttpsError(
+      "unauthenticated",
+      "The function must be called while authenticated."
+    );
+  }
 
-        return res.status(200).send({ success: true, message: `Successfully deleted all data for user ${uid}.` });
+  const callerClaims = request.auth.token;
+  // Ensure the user has permission to delete users.
+  if (callerClaims.role !== "Super Admin" && callerClaims.role !== "PHO Admin") {
+    throw new HttpsError(
+      "permission-denied",
+      "You do not have permission to delete users."
+    );
+  }
 
-    } catch (error) {
-        console.error(`An error occurred while deleting user ${uid}:`, error);
-        return res.status(500).send({ error: 'Internal Server Error', message: error.message });
-    }
+  // Proceed with deletion.
+  const { uid } = request.data;
+  try {
+    await admin.auth().deleteUser(uid);
+    await admin.firestore().collection("users").doc(uid).delete();
+    return { message: `Successfully deleted user ${uid}` };
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    throw new HttpsError("internal", "Unable to delete user.");
+  }
 });
 
 
 /**
- * Triggers when a file is deleted from Storage and deletes the corresponding
- * Firestore document. Uses the v2 'onObjectDeleted' handler.
+ * Adds a 'createdAt' timestamp to new user documents in Firestore.
+ * This uses the modern v2 syntax for Firestore triggers.
  */
-exports.syncDeletionToFirestore = onObjectDeleted(async (event) => {
-    const file = event.data;
-    const filePath = file.name;
-
-    if (!filePath.startsWith("submissions/")) {
-        console.log(`File at '${filePath}' is not a submission. Ignoring.`);
-        return null;
+exports.addTimestamp = onDocumentCreated("users/{userId}", (event) => {
+    const snap = event.data;
+    if (!snap) {
+        console.log("No data associated with the event, skipping.");
+        return;
     }
-
-    console.log(`File deleted: ${filePath}. Searching for matching Firestore document...`);
-
-    try {
-        const submissionsRef = db.collection("submissions");
-        const snapshot = await submissionsRef.where("storagePath", "==", filePath).limit(1).get();
-
-        if (snapshot.empty) {
-            console.warn(`No submission document found with storagePath matching '${filePath}'.`);
-            return null;
-        }
-
-        const docToDelete = snapshot.docs[0];
-        console.log(`Found matching document with ID: ${docToDelete.id}. Deleting...`);
-        
-        await docToDelete.ref.delete();
-        
-        console.log(`Successfully deleted Firestore document ${docToDelete.id}.`);
-        return null;
-
-    } catch (error) {
-        console.error("Error synchronizing deletion to Firestore:", error);
-        return null;
-    }
-});
+    // Set the 'createdAt' field on the new document.
+    return snap.ref.set(
+      { createdAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+  });
