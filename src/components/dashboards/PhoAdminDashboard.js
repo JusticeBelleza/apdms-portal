@@ -3,16 +3,19 @@ import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { Download, Ban, Check } from 'lucide-react';
 
+// The 'onDeny' prop will now open the rejection modal
 const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDeny }) => {
+    // Keep this for the chart, as it's still relevant to "My Programs"
     const assignedProgramIds = user.assignedPrograms || [];
     const myPrograms = programs.filter(p => assignedProgramIds.includes(p.id));
     const myProgramNames = myPrograms.map(p => p.name);
 
+    // --- MODIFICATION START ---
+    // Show all submissions pending confirmation to the PHO Admin
     const pendingSubmissions = submissions.filter(s =>
-        myProgramNames.includes(s.programName) &&
-        !s.confirmed &&
-        s.status !== 'Rejected'
+        !s.confirmed && s.status !== 'Rejected'
     );
+    // --- MODIFICATION END ---
 
     const chartData = myPrograms.map(p => {
         const facilitiesForProgram = users.filter(u => u.assignedPrograms?.includes(p.id) && u.role === 'Facility User');
@@ -55,6 +58,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDe
                                 <div className="flex justify-between items-center mt-2">
                                     <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:bg-blue-100 rounded-full"><Download className="w-5 h-5"/></a>
                                     <div className="flex space-x-2">
+                                        {/* The onDeny function will now open the rejection modal */}
                                         <button onClick={() => onDeny(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full"><Ban className="w-5 h-5"/></button>
                                         {user.permissions?.canConfirmSubmissions && (
                                             <button onClick={() => onConfirm(sub.id)} className="p-2 text-green-600 hover:bg-green-100 rounded-full"><Check className="w-5 h-5"/></button>
@@ -63,7 +67,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDe
                                 </div>
                             </div>
                         )) : (
-                            <p className="text-center text-gray-500 pt-10">No pending submissions for your programs.</p>
+                            <p className="text-center text-gray-500 pt-10">No pending submissions.</p>
                         )}
                     </div>
                 </div>

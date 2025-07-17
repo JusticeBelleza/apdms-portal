@@ -1,4 +1,3 @@
-// src/components/layout/Header.js
 import React, { useState } from 'react';
 import { Bell, LogOut, Calendar } from 'lucide-react';
 import { getMorbidityWeek } from '../../utils/helpers';

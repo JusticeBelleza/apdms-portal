@@ -1,38 +1,34 @@
-// src/pages/SubmissionsHistory.js
 import React from 'react';
-import { deleteDoc, doc } from 'firebase/firestore';
-import { Download, Trash2 } from 'lucide-react';
-import { toast } from 'react-hot-toast'; // Import toast
+import { Download } from 'lucide-react';
 
-const SubmissionsHistory = ({ user, submissions, db }) => {
-    // --- FIX: Sort by timestamp for reliability ---
-    const userSubmissions = submissions
-        .filter(s => s.facilityName === user.facilityName)
-        .sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
-
-    const handleDeleteSubmission = async (submissionId) => {
-        if (window.confirm('Are you sure you want to delete this unconfirmed submission? This action cannot be undone.')) {
-            try {
-                await deleteDoc(doc(db, "submissions", submissionId));
-                toast.success('Submission deleted successfully!');
-            } catch (error) {
-                toast.error(`Error deleting submission: ${error.message}`);
-            }
+const SubmissionsHistory = ({ user, submissions }) => {
+    // Show relevant submissions based on user role.
+    const filteredSubmissions = submissions.filter(s => {
+        if (user.role === 'PHO Admin') {
+            return s.confirmed;
         }
-    };
+        return s.facilityName === user.facilityName;
+    });
+
+    const userSubmissions = filteredSubmissions
+        .sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
     
     return (
         <div className="p-4 md:p-6 lg:p-8 space-y-6">
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Your Submission History</h1>
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Submission History</h1>
             <div className="bg-white p-6 rounded-lg shadow-md">
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Program Name</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Morbidity Week</th>
+                                {user.role === 'PHO Admin' && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Facility</th>
+                                )}
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submission Date & Time</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted By</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zero Report</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
@@ -40,28 +36,34 @@ const SubmissionsHistory = ({ user, submissions, db }) => {
                             {userSubmissions.length > 0 ? userSubmissions.map(sub => (
                                 <tr key={sub.id}>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sub.programName}</td>
-                                    {/* --- FIX: Display N/A for old records without a submissionDate --- */}
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submissionDate ? new Date(sub.submissionDate).toLocaleDateString() : 'N/A'}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.morbidityWeek}</td>
-                                    {/* --- FIX: Use the correct field 'submittedByName' --- */}
+                                    {user.role === 'PHO Admin' && (
+                                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.facilityName}</td>
+                                    )}
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.timestamp?.toDate().toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) || 'N/A'}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                            sub.confirmed ? 'bg-green-100 text-green-800' :
+                                            sub.status === 'Rejected' ? 'bg-red-100 text-red-800' :
+                                            'bg-yellow-100 text-yellow-800'
+                                        }`}>
+                                            {sub.confirmed ? 'Approved' : sub.status || 'Pending'}
+                                        </span>
+                                    </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sub.submittedByName}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        {sub.isZeroReport ? 'Yes' : 'No'}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                         {sub.fileURL && (
-                                            <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="p-2 text-primary hover:text-secondary inline-block">
+                                            <a href={sub.fileURL} download={sub.fileName} target="_blank" rel="noopener noreferrer" className="p-2 text-blue-600 hover:text-blue-800 inline-block">
                                                 <Download className="w-5 h-5"/>
                                             </a>
-                                        )}
-                                        {/* Allow deletion only if the submission is not yet confirmed */}
-                                        {!sub.confirmed && (
-                                            <button onClick={() => handleDeleteSubmission(sub.id)} className="p-2 text-red-600 hover:bg-red-100 rounded-full inline-flex items-center">
-                                                <Trash2 className="w-4 h-4"/>
-                                            </button>
                                         )}
                                     </td>
                                 </tr>
                             )) : (
                                 <tr>
-                                    <td colSpan="5" className="text-center py-10 text-gray-500">
+                                    <td colSpan={user.role === 'PHO Admin' ? 7 : 6} className="text-center py-10 text-gray-500">
                                         No submissions found.
                                     </td>
                                 </tr>

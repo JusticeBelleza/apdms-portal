@@ -17,6 +17,7 @@ import LoginScreen from './components/layout/LoginScreen';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import ConfirmationModal from './components/modals/ConfirmationModal';
+import RejectionModal from './components/modals/RejectionModal';
 
 // Dashboard Components
 import AdminDashboard from './components/dashboards/AdminDashboard';
@@ -35,6 +36,7 @@ import ProfilePage from './pages/ProfilePage';
 import AuditLogPage from './pages/AuditLogPage';
 import DeletionRequestsPage from './pages/DeletionRequestsPage';
 
+
 export default function App() {
     const [user, setUser] = useState(null);
     const [page, setPage] = useState('dashboard');
@@ -45,11 +47,20 @@ export default function App() {
     const [users, setUsers] = useState([]);
     const [submissions, setSubmissions] = useState([]);
     const [announcements, setAnnouncements] = useState([]);
-    const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
     const [onlineStatuses, setOnlineStatuses] = useState({});
+    
+    const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
+    // --- FIX: Re-added state for user-specific notifications ---
+    const [userNotifications, setUserNotifications] = useState([]);
+    const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
     
     const [showDeletionConfirmation, setShowDeletionConfirmation] = useState(false);
     const [deletionInfo, setDeletionInfo] = useState({ subId: null, action: null });
+    
+    const [rejectionModalState, setRejectionModalState] = useState({
+        isOpen: false,
+        submissionId: null,
+    });
     
     const listenerUnsubscribes = useRef([]);
 
@@ -75,8 +86,6 @@ export default function App() {
                         permissions = permsDocSnap.data();
                     }
 
-                    // **FIXED**: This block ensures the Super Admin user object has all the necessary
-                    // permission flags for the sidebar UI to render correctly.
                     if (userData.role === 'Super Admin') {
                         permissions = { 
                             canManageUsers: true, 
@@ -113,12 +122,6 @@ export default function App() {
         if (user && announcements.length > 0) {
             const seenIds = user.seenAnnouncements || [];
             const newUnreadCount = announcements.filter(ann => !seenIds.includes(ann.id)).length;
-            
-            console.log("--- Notification Debug ---");
-            console.log("Total announcements fetched:", announcements.length);
-            console.log("Announcement IDs seen by user:", seenIds);
-            console.log("Calculated unread count:", newUnreadCount);
-
             setUnreadAnnouncements(newUnreadCount);
         } else {
             setUnreadAnnouncements(0);
@@ -146,19 +149,8 @@ export default function App() {
         onValue(statusRef, (snapshot) => {
             setOnlineStatuses(snapshot.val() || {});
         });
-
-        const deleteOldAnnouncements = async () => {
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-            const announcementsQuery = query(collection(db, "announcements"), where("timestamp", "<", sevenDaysAgo));
-            const snapshot = await getDocs(announcementsQuery);
-            const batch = writeBatch(db);
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
-        };
-
-        deleteOldAnnouncements();
     
+        // --- SETUP ALL REAL-TIME LISTENERS ---
         listenerUnsubscribes.current = [
             onSnapshot(collection(db, "programs"), (snapshot) => setPrograms(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(collection(db, "users"), (snapshot) => setUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
@@ -167,6 +159,12 @@ export default function App() {
             onSnapshot(query(collection(db, "announcements"), orderBy("timestamp", "desc")), (snapshot) => {
                 setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
             }),
+            // --- FIX: Re-added notification listener ---
+            onSnapshot(query(collection(db, "notifications"), where("userId", "==", user.uid), orderBy("timestamp", "desc")), (snapshot) => {
+                const fetchedNotifications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setUserNotifications(fetchedNotifications);
+                setUnreadNotificationsCount(fetchedNotifications.filter(n => !n.isRead).length);
+            })
         ];
     
         return () => {
@@ -196,14 +194,8 @@ export default function App() {
                 case 'auth/wrong-password':
                     errorMessage = 'Incorrect password. Please try again.';
                     break;
-                case 'auth/invalid-email':
-                    errorMessage = 'The email address is not valid.';
-                    break;
-                case 'auth/invalid-credential':
-                    errorMessage = 'Invalid credentials. Please check your email and password.';
-                    break;
                 default:
-                    errorMessage = 'Login failed. Please try again.';
+                    errorMessage = 'Invalid credentials. Please check your email and password.';
                     break;
             }
             toast.error(errorMessage, { id: toastId });
@@ -211,9 +203,6 @@ export default function App() {
     };
 
     const handleLogout = () => {
-        listenerUnsubscribes.current.forEach(unsub => unsub());
-        listenerUnsubscribes.current = [];
-
         if(user) {
             const userStatusRef = rtdbRef(rtdb, `status/${user.uid}`);
             set(userStatusRef, false);
@@ -229,10 +218,89 @@ export default function App() {
         toast.success('Submission confirmed!');
     };
     
-    const handleDenySubmission = async (submissionId) => {
-        const subDocRef = doc(db, 'submissions', submissionId);
-        await setDoc(subDocRef, { confirmed: false, status: 'Rejected' }, { merge: true });
-        toast.error('Submission rejected.');
+    const handleOpenRejectionModal = (submissionId) => {
+        setRejectionModalState({ isOpen: true, submissionId });
+    };
+
+    const handleRejectWithReason = async (reason) => {
+        const { submissionId } = rejectionModalState;
+        if (!submissionId || !reason.trim()) {
+            toast.error("A reason is required for rejection.");
+            return;
+        }
+
+        const submissionDocRef = doc(db, 'submissions', submissionId);
+        
+        try {
+            const submissionDoc = await getDoc(submissionDocRef);
+
+            if (submissionDoc.exists()) {
+                const submissionData = submissionDoc.data();
+                const facilityUser = users.find(u => u.facilityId === submissionData.facilityId && (u.role === 'Facility User' || u.role === 'Facility Admin'));
+
+                const batch = writeBatch(db);
+
+                batch.update(submissionDocRef, {
+                    status: 'Rejected',
+                    confirmed: false,
+                    rejectionReason: reason,
+                });
+
+                if (facilityUser) {
+                    const notificationRef = doc(collection(db, 'notifications'));
+                    batch.set(notificationRef, {
+                        userId: facilityUser.id,
+                        title: `Submission Rejected: ${submissionData.programName}`,
+                        message: `Your submission for Morbidity Week ${submissionData.morbidityWeek} was rejected. Reason: "${reason}"`,
+                        timestamp: serverTimestamp(),
+                        isRead: false,
+                    });
+                }
+
+                await batch.commit();
+                toast.error('Submission has been rejected and the user has been notified.');
+            }
+        } catch (error) {
+            console.error("Error rejecting submission: ", error);
+            toast.error("An error occurred while rejecting the submission.");
+        } finally {
+            setRejectionModalState({ isOpen: false, submissionId: null });
+        }
+    };
+    
+    const handleDeleteSubmission = async (subId) => {
+        if (!subId) {
+            toast.error("Invalid submission ID.");
+            return;
+        }
+    
+        const toastId = toast.loading("Deleting submission...");
+    
+        try {
+            const subDocRef = doc(db, "submissions", subId);
+            const subDoc = await getDoc(subDocRef);
+    
+            if (subDoc.exists()) {
+                const subData = subDoc.data();
+                if (subData.fileURL) {
+                    const fileRef = storageRef(storage, subData.fileURL);
+                    try {
+                        await deleteObject(fileRef);
+                    } catch (storageError) {
+                        console.error("Could not delete file from storage, continuing with Firestore deletion.", storageError);
+                    }
+                }
+            }
+    
+            await deleteDoc(subDocRef);
+    
+            toast.success('Submission deleted successfully!', { id: toastId });
+            await logAudit(db, user, "Delete Submission", { submissionId: subId });
+    
+        } catch (error) {
+            console.error("Error deleting submission:", error);
+            toast.error(`Error deleting submission: ${error.message}`, { id: toastId });
+        }
     };
 
     const handleAddAnnouncement = async (title, message) => {
@@ -244,42 +312,33 @@ export default function App() {
     const handleDeleteAnnouncement = (announcementId) => {
         toast((t) => (
           <div className="flex flex-col items-center gap-2 text-center">
-            <p className="font-bold text-gray-800">
-              Delete this announcement?
-            </p>
-            <p className="text-sm text-gray-600">
-              This action cannot be undone.
-            </p>
+            <p className="font-bold text-gray-800">Delete this announcement?</p>
+            <p className="text-sm text-gray-600">This action cannot be undone.</p>
             <div className="flex gap-3 mt-2">
               <button
-                className="px-4 py-1 bg-red-600 text-white text-sm font-semibold rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                className="px-4 py-1 bg-red-600 text-white text-sm font-semibold rounded-md hover:bg-red-700"
                 onClick={() => {
-                  // Perform the actual deletion
                   const deletePromise = deleteDoc(doc(db, "announcements", announcementId));
-                  
                   toast.promise(deletePromise, {
                       loading: 'Deleting...',
                       success: 'Announcement deleted!',
                       error: 'Could not delete.',
                   });
-    
                   logAudit(db, user, "Delete Announcement", { announcementId });
-                  toast.dismiss(t.id); // Close the confirmation toast
+                  toast.dismiss(t.id);
                 }}
               >
                 Confirm Delete
               </button>
               <button
-                className="px-4 py-1 bg-gray-200 text-gray-800 text-sm font-semibold rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+                className="px-4 py-1 bg-gray-200 text-gray-800 text-sm font-semibold rounded-md hover:bg-gray-300"
                 onClick={() => toast.dismiss(t.id)}
               >
                 Cancel
               </button>
             </div>
           </div>
-        ), {
-          duration: 6000, // Make the confirmation stay on screen longer
-        });
+        ), { duration: 6000 });
       };
 
     const handleDeletionConfirm = (subId, action) => {
@@ -298,21 +357,7 @@ export default function App() {
     };
 
     const handleApproveDeletion = async (subId) => {
-        const subDocRef = doc(db, "submissions", subId);
-        const subDoc = await getDoc(subDocRef);
-        if (subDoc.exists()) {
-            const subData = subDoc.data();
-            if (subData.fileURL) {
-                const fileRef = storageRef(storage, subData.fileURL);
-                try {
-                    await deleteObject(fileRef);
-                } catch (error) {
-                    console.error("Error deleting file from storage:", error);
-                }
-            }
-        }
-        await deleteDoc(subDocRef);
-        toast.success('Deletion approved and submission removed.');
+        await handleDeleteSubmission(subId); // Reuse the main deletion logic
     };
 
     const handleDenyDeletionRequest = async (subId) => {
@@ -322,23 +367,30 @@ export default function App() {
     };
 
     const markAnnouncementsAsRead = async () => {
-        if (!user) return;
+        if (!user || unreadAnnouncements === 0) return;
         const userDocRef = doc(db, "users", user.uid);
         const announcementIds = announcements.map(ann => ann.id);
         
         try {
             await updateDoc(userDocRef, { seenAnnouncements: announcementIds });
-            
             setUser(prevUser => ({ ...prevUser, seenAnnouncements: announcementIds }));
             setUnreadAnnouncements(0);
         } catch (err) {
             console.error("Failed to mark announcements as read:", err);
-            toast.error("Could not save notification status.");
         }
     };
     
-    const handleSuperAdminDeletionRequest = (subId) => {
-        handleDeletionConfirm(subId, 'approve');
+    // --- FIX: Added handler for user-specific notifications ---
+    const handleMarkNotificationsAsRead = async () => {
+        if (!user || unreadNotificationsCount === 0) return;
+        const batch = writeBatch(db);
+        userNotifications.forEach(notification => {
+            if (!notification.isRead) {
+                const notifRef = doc(db, "notifications", notification.id);
+                batch.update(notifRef, { isRead: true });
+            }
+        });
+        await batch.commit().catch(err => console.error("Failed to mark notifications as read", err));
     };
 
     const renderPage = () => {
@@ -351,14 +403,14 @@ export default function App() {
         switch(page) {
             case 'dashboard':
                 if (user.role === 'Facility User') return <FacilityDashboard user={loggedInUserDetails} allPrograms={activePrograms} submissions={submissions} db={db} />;
-                if (user.role === 'PHO Admin') return <PhoAdminDashboard user={loggedInUserDetails} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} onDeny={handleDenySubmission} />;
+                if (user.role === 'PHO Admin') return <PhoAdminDashboard user={loggedInUserDetails} programs={programs} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} onDeny={handleOpenRejectionModal} />;
                 if (user.role === 'Facility Admin') return <FacilityAdminDashboard user={loggedInUserDetails} programs={programs} submissions={submissions} users={users} onlineStatuses={onlineStatuses}/>;
                 return <AdminDashboard facilities={facilities} programs={programsForUser} submissions={submissions} users={users} onConfirm={handleConfirmSubmission} user={loggedInUserDetails} onNavigate={setPage} />;
             case 'reports':
                 if (user.permissions?.canExportData) return <ReportsPage programs={programsForUser} submissions={submissions} users={users} user={loggedInUserDetails} />;
                 break;
             case 'databank':
-                return <DatabankPage user={loggedInUserDetails} submissions={submissions} programs={programs} facilities={facilities} db={db} onSuperAdminDelete={handleSuperAdminDeletionRequest} />;
+                return <DatabankPage user={loggedInUserDetails} submissions={submissions} programs={programs} facilities={facilities} db={db} onSuperAdminDelete={handleDeletionConfirm} />;
             case 'facilities':
                 if (user.permissions?.canManageFacilities) return <FacilityManagementPage user={loggedInUserDetails} facilities={facilities} db={db} />;
                 break;
@@ -369,7 +421,7 @@ export default function App() {
                 if (user.permissions?.canManageUsers) return <UserManagementPage users={users} facilities={facilities} programs={programs} currentUser={loggedInUserDetails} auth={auth} db={db} />;
                 break;
             case 'submissions':
-                return <SubmissionsHistory user={loggedInUserDetails} submissions={submissions} db={db} />;
+                return <SubmissionsHistory user={loggedInUserDetails} submissions={submissions} onDelete={handleDeleteSubmission} />;
             case 'profile':
                 return <ProfilePage user={loggedInUserDetails} auth={auth} db={db} setUser={setUser} />;
             case 'audit':
@@ -404,11 +456,16 @@ export default function App() {
                                 <Header
                                     user={loggedInUserDetails}
                                     onLogout={handleLogout}
-                                    unreadCount={unreadAnnouncements}
-                                    onBellClick={markAnnouncementsAsRead}
+                                    // --- FIX: Pass both announcements and user notifications ---
                                     announcements={announcements}
+                                    unreadAnnouncements={unreadAnnouncements}
+                                    onBellClick={markAnnouncementsAsRead} // This should likely be for user notifications now
                                     onAddAnnouncement={handleAddAnnouncement}
                                     onDeleteAnnouncement={handleDeleteAnnouncement}
+                                    // --- User Notification Props ---
+                                    notifications={userNotifications}
+                                    unreadNotificationsCount={unreadNotificationsCount}
+                                    onMarkNotificationsAsRead={handleMarkNotificationsAsRead}
                                 />
                                 <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
                                     {renderPage()}
@@ -421,6 +478,11 @@ export default function App() {
                                 onConfirm={executeDeletion}
                                 title="Confirm Action"
                                 message="Are you sure you want to proceed with this action? This cannot be undone."
+                            />
+                             <RejectionModal
+                                isOpen={rejectionModalState.isOpen}
+                                onClose={() => setRejectionModalState({ isOpen: false, submissionId: null })}
+                                onConfirm={handleRejectWithReason}
                             />
                         </div>
                     );

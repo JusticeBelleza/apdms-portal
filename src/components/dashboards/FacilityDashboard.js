@@ -31,7 +31,8 @@ const FacilityDashboard = ({ user, allPrograms, submissions, db }) => {
         }
 
         const toastId = toast.loading('Uploading file...');
-        const isZeroCase = !file;
+        const isZeroReport = !file; // If file is null, it's a zero report.
+        
         let fileName = '';
         if (file) {
             const fileExtension = file.name.split('.').pop();
@@ -40,7 +41,6 @@ const FacilityDashboard = ({ user, allPrograms, submissions, db }) => {
             fileName = `Zero-Case-Report-${new Date().getFullYear()}-MW-${morbidityWeek}.pdf`;
         }
 
-        // This is the unique path for the file in Firebase Storage.
         const storagePath = `submissions/${user.facilityName}/${selectedProgram.name}/${morbidityWeek}/${fileName}`;
         const fileRef = storageRef(storage, storagePath);
         const submissionRef = doc(collection(db, "submissions"));
@@ -58,15 +58,14 @@ const FacilityDashboard = ({ user, allPrograms, submissions, db }) => {
                 programId: selectedProgram.id,
                 programName: selectedProgram.name,
                 morbidityWeek: morbidityWeek,
-                submittedBy: user.uid,
+                userId: user.uid, // Changed from submittedBy for consistency
                 submittedByName: user.name,
                 timestamp: serverTimestamp(),
                 submissionDate: new Date().toISOString(), 
                 status: 'For Confirmation',
                 fileURL: fileURL,
                 fileName: fileName,
-                isZeroCase: isZeroCase,
-                // --- THIS LINE IS CRITICAL for the new cloud function to work ---
+                isZeroReport: isZeroReport, // --- FIX: Standardized field name ---
                 storagePath: storagePath, 
             };
             

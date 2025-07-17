@@ -1,18 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Trash2 } from 'lucide-react';
-import { useUser } from '../../context/UserContext';
-// ADD THIS IMPORT
 import { toast } from 'react-hot-toast';
 
-const NotificationDropdown = ({ isOpen, onClose, announcements, onSave, onDelete }) => {
+// --- FIX: Removed dependency on useUser context and now accepts `user` as a prop ---
+const NotificationDropdown = ({ isOpen, onClose, announcements = [], user, onSave, onDelete }) => {
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
     const dropdownRef = useRef(null);
-    const { currentUser, role } = useUser();
 
     useEffect(() => {
         const handleClickOutside = (event) => {
-            if (dropdownRef.current && !dropdownRef.current.contains(event.target) && !event.target.closest('button > svg.lucide-bell')) {
+            // Updated to check for the specific button in the header
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target) && !event.target.closest('button.relative.p-2')) {
                 onClose();
             }
         };
@@ -28,7 +27,6 @@ const NotificationDropdown = ({ isOpen, onClose, announcements, onSave, onDelete
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!title.trim() || !message.trim()) {
-            // REPLACED 'alert' WITH 'toast.error'
             toast.error("Title and message cannot be empty.");
             return;
         }
@@ -37,7 +35,8 @@ const NotificationDropdown = ({ isOpen, onClose, announcements, onSave, onDelete
         setMessage('');
     };
 
-    if (!currentUser) {
+    // --- FIX: Check for the user prop directly ---
+    if (!user) {
         return null; 
     }
 
@@ -50,23 +49,26 @@ const NotificationDropdown = ({ isOpen, onClose, announcements, onSave, onDelete
                 <h2 className="text-lg font-bold text-gray-800">Notifications</h2>
             </div>
             <div className="space-y-2 max-h-80 overflow-y-auto p-3">
-                {announcements.map(ann => (
+                {/* --- FIX: Added safeguard in case announcements is ever not an array --- */}
+                {Array.isArray(announcements) && announcements.map(ann => (
                     <div key={ann.id} className="bg-gray-50 p-3 rounded-lg relative hover:bg-gray-100">
                         <p className="font-semibold text-sm">{ann.title}</p>
                         <p className="text-gray-700 text-sm">{ann.message}</p>
                         <p className="text-xs mt-1 text-gray-500">
-                            {ann.author} - {new Date(ann.timestamp?.toDate()).toLocaleDateString()}
+                            {ann.author} - {ann.timestamp ? new Date(ann.timestamp.toDate()).toLocaleDateString() : 'Just now'}
                         </p>
-                        {role === 'Super Admin' && (
+                        {/* --- FIX: Use user.role from props --- */}
+                        {user.role === 'Super Admin' && (
                             <button onClick={() => onDelete(ann.id)} className="absolute top-1 right-1 p-1 text-red-500 hover:text-red-700 rounded-full hover:bg-red-100">
                                 <Trash2 className="w-3 h-3" />
                             </button>
                         )}
                     </div>
                 ))}
-                {announcements.length === 0 && <p className="text-center text-gray-500 py-4">No new announcements.</p>}
+                {(!announcements || announcements.length === 0) && <p className="text-center text-gray-500 py-4">No new announcements.</p>}
             </div>
-            {role === 'Super Admin' && (
+            {/* --- FIX: Use user.role from props --- */}
+            {user.role === 'Super Admin' && (
                 <form onSubmit={handleSubmit} className="space-y-3 p-3 border-t">
                     <h3 className="text-md font-semibold">New Announcement</h3>
                     <div>
