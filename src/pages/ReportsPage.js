@@ -1,8 +1,9 @@
 // src/pages/ReportsPage.js
 import React, { useState, useEffect } from 'react';
 import { getMorbidityWeek, generateMorbidityWeeks, getDatesForMorbidityWeek } from '../utils/helpers';
-import { Printer } from 'lucide-react';
-import toast from 'react-hot-toast'; // Import toast
+import { Printer, Download } from 'lucide-react'; // Import Download icon
+import toast from 'react-hot-toast';
+import { CSVLink } from 'react-csv'; // Import CSVLink
 
 const ReportsPage = ({ programs, submissions, users, user }) => {
     const [reportType, setReportType] = useState('');
@@ -29,7 +30,6 @@ const ReportsPage = ({ programs, submissions, users, user }) => {
 
     const handleGenerateReport = () => {
         if (!selectedProgram) {
-            // Replaced alert with react-hot-toast
             toast.error("Please select a program to generate a report.");
             return;
         }
@@ -44,7 +44,6 @@ const ReportsPage = ({ programs, submissions, users, user }) => {
 
         let startDate, endDate;
         let title = '';
-
         
         switch(reportType) {
             case 'Morbidity Week':
@@ -89,6 +88,13 @@ const ReportsPage = ({ programs, submissions, users, user }) => {
         setGeneratedReport({ title, period: `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`, totalCases, reportingFacilities, totalFacilities: facilitiesForReport.length, breakdown: reportData.sort((a, b) => b.totalCases - a.totalCases) });
     };
 
+    // CSV Headers
+    const csvHeaders = [
+        { label: "Facility Name", key: "facilityName" },
+        { label: "Submissions Made", key: "submissionsCount" },
+        { label: "Total Cases Reported", key: "totalCases" }
+    ];
+
     return (
         <div className="space-y-6">
             <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-800">Report Generation</h1>
@@ -127,10 +133,24 @@ const ReportsPage = ({ programs, submissions, users, user }) => {
                             <p className="text-sm text-gray-500">Reporting Period: {generatedReport.period}</p>
                             <p className="text-sm text-gray-500">Generated on: {new Date().toLocaleDateString()}</p>
                         </div>
-                        <button onClick={() => window.print()} className="print:hidden flex items-center bg-gray-700 hover:bg-gray-800 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
-                            <Printer className="w-4 h-4 mr-2" />
-                            Print / Save as PDF
-                        </button>
+                        <div className="flex space-x-2 print:hidden">
+                           <button onClick={() => window.print()} className="flex items-center justify-center bg-gray-700 hover:bg-gray-800 text-white font-bold py-2 px-2 sm:px-4 rounded-lg transition duration-300">
+                                <Printer className="w-4 h-4" />
+                                <span className="hidden sm:inline sm:ml-2">Print</span>
+                            </button>
+                            {generatedReport.breakdown && generatedReport.breakdown.length > 0 && (
+                                <CSVLink
+                                    data={generatedReport.breakdown}
+                                    headers={csvHeaders}
+                                    filename={`${generatedReport.title.replace(/ /g, "_")}.csv`}
+                                    className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-2 sm:px-4 rounded-lg transition duration-300"
+                                    target="_blank"
+                                >
+                                    <Download className="w-4 h-4" />
+                                    <span className="hidden sm:inline sm:ml-2">Export to CSV</span>
+                                </CSVLink>
+                            )}
+                        </div>
                     </div>
                     <hr className="my-6" />
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
