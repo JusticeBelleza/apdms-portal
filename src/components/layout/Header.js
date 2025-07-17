@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { Bell, LogOut, Calendar } from "lucide-react";
+import { Bell, LogOut, Calendar, Megaphone } from "lucide-react";
 import { getMorbidityWeek } from "../../utils/helpers";
 import NotificationDropdown from "./NotificationDropdown";
+// The AnnouncementModal is no longer rendered here, so we don't need to import it.
 
 const Header = ({
   user,
@@ -9,6 +10,8 @@ const Header = ({
   notifications,
   unreadNotificationsCount,
   onMarkNotificationsAsRead,
+  onClearAllNotifications,
+  onAddAnnouncement, // This prop now correctly triggers the modal in App.js
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
@@ -33,6 +36,17 @@ const Header = ({
         </div>
       </div>
       <div className="flex items-center space-x-1 sm:space-x-2">
+        {/* Announce Button for Super Admin */}
+        {user.role === 'Super Admin' && (
+          <button
+            onClick={onAddAnnouncement} // This calls the function from App.js to open the modal
+            className="relative p-2 rounded-full hover:bg-gray-200"
+            title="Create Announcement"
+          >
+            <Megaphone className="w-5 h-5 sm:w-6 sm:h-6 text-gray-600" />
+          </button>
+        )}
+
         <div className="relative">
           <button onClick={handleToggleDropdown} className="relative p-2 rounded-full hover:bg-gray-200">
             <Bell className="w-5 h-5 sm:w-6 sm:h-6 text-gray-600" />
@@ -44,12 +58,14 @@ const Header = ({
             isOpen={isDropdownOpen}
             onClose={() => setIsDropdownOpen(false)}
             notifications={notifications}
+            onClear={onClearAllNotifications}
           />
         </div>
         <button onClick={onLogout} className="p-2 rounded-full hover:bg-gray-200 md:hidden">
           <LogOut className="w-5 h-5 text-gray-600" />
         </button>
       </div>
+      {/* The AnnouncementModal is now rendered in App.js, not here */}
     </header>
   );
 };

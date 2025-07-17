@@ -33,6 +33,7 @@ import Sidebar from "./components/layout/Sidebar";
 import Header from "./components/layout/Header";
 import ConfirmationModal from "./components/modals/ConfirmationModal";
 import RejectionModal from "./components/modals/RejectionModal";
+import AnnouncementModal from "./components/modals/AnnouncementModal";
 
 // Dashboard Components
 import AdminDashboard from "./components/dashboards/AdminDashboard";
@@ -55,6 +56,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [page, setPage] = useState("dashboard");
   const [loading, setLoading] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const [facilities, setFacilities] = useState([]);
   const [programs, setPrograms] = useState([]);
@@ -74,6 +76,8 @@ export default function App() {
     isOpen: false,
     submissionId: null,
   });
+
+  const [isAnnouncementModalOpen, setAnnouncementModalOpen] = useState(false);
 
   const listenerUnsubscribes = useRef([]);
 
@@ -131,6 +135,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // This effect handles the actual sign-out AFTER the user state has been cleared
+    // and components have had a chance to unmount and run their cleanup functions.
+    if (isLoggingOut && user === null) {
+        const performSignOut = async () => {
+            try {
+                await signOut(auth);
+                toast.success("You have been logged out.");
+            } catch (error) {
+                console.error("Sign out error:", error);
+                toast.error("An error occurred during sign out.");
+            } finally {
+                setPage("dashboard");
+                setIsLoggingOut(false); // Reset for next time
+            }
+        };
+        // A small timeout allows the React render cycle to complete before signing out.
+        setTimeout(performSignOut, 50);
+    }
+  }, [user, isLoggingOut]);
+
+  useEffect(() => {
     if (user && announcements.length > 0) {
       const seenIds = user.seenAnnouncements || [];
       const newUnreadCount = announcements.filter((ann) => !seenIds.includes(ann.id)).length;
@@ -142,8 +167,10 @@ export default function App() {
 
   useEffect(() => {
     if (!user) {
-      listenerUnsubscribes.current.forEach((unsub) => unsub());
-      listenerUnsubscribes.current = [];
+      if (listenerUnsubscribes.current.length > 0) {
+        listenerUnsubscribes.current.forEach((unsub) => unsub());
+        listenerUnsubscribes.current = [];
+      }
       return;
     }
 
@@ -162,8 +189,7 @@ export default function App() {
       setOnlineStatuses(snapshot.val() || {});
     });
 
-    // --- SETUP ALL REAL-TIME LISTENERS ---
-    listenerUnsubscribes.current = [
+    const listeners = [
       onSnapshot(collection(db, "programs"), (snapshot) =>
         setPrograms(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
       ),
@@ -172,9 +198,6 @@ export default function App() {
       ),
       onSnapshot(collection(db, "facilities"), (snapshot) =>
         setFacilities(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
-      ),
-      onSnapshot(collection(db, "submissions"), (snapshot) =>
-        setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
       ),
       onSnapshot(query(collection(db, "announcements"), orderBy("timestamp", "desc")), (snapshot) => {
         setAnnouncements(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
@@ -188,6 +211,19 @@ export default function App() {
         }
       ),
     ];
+
+    if (user.role === "PHO Admin" || user.role === "Super Admin") {
+      const submissionsQuery = query(collection(db, "submissions"), where("status", "==", "Waiting for Approval"));
+      listeners.push(
+        onSnapshot(submissionsQuery, (snapshot) => {
+          setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        })
+      );
+    } else {
+      setSubmissions([]);
+    }
+
+    listenerUnsubscribes.current = listeners;
 
     return () => {
       listenerUnsubscribes.current.forEach((unsub) => unsub());
@@ -224,20 +260,19 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    if (user) {
-      const userStatusRef = rtdbRef(rtdb, `status/${user.uid}`);
-      set(userStatusRef, false);
+  const handleLogout = async () => {
+    if (auth.currentUser) {
+      const userStatusRef = rtdbRef(rtdb, `status/${auth.currentUser.uid}`);
+      await set(userStatusRef, false);
     }
-    signOut(auth);
-    toast.success("You have been logged out.");
-    setPage("dashboard");
+    setIsLoggingOut(true);
+    setUser(null);
   };
 
   const handleConfirmSubmission = async (submissionId) => {
     const subDocRef = doc(db, "submissions", submissionId);
-    await setDoc(subDocRef, { confirmed: true, status: "Submitted" }, { merge: true });
-    toast.success("Submission confirmed!");
+    await setDoc(subDocRef, { confirmed: true, status: "Approved" }, { merge: true });
+    toast.success("Submission Approved!");
   };
 
   const handleOpenRejectionModal = (submissionId) => {
@@ -251,6 +286,7 @@ export default function App() {
       return;
     }
 
+    const toastId = toast.loading("Rejecting submission...");
     const submissionDocRef = doc(db, "submissions", submissionId);
 
     try {
@@ -258,12 +294,6 @@ export default function App() {
 
       if (submissionDoc.exists()) {
         const submissionData = submissionDoc.data();
-
-        // Find ALL relevant users, not just the first one.
-        const facilityUsersToNotify = users.filter(
-          (u) => u.facilityId === submissionData.facilityId && (u.role === "Facility User" || u.role === "Facility Admin")
-        );
-
         const batch = writeBatch(db);
 
         batch.update(submissionDocRef, {
@@ -272,27 +302,37 @@ export default function App() {
           rejectionReason: reason,
         });
 
-        // Create a notification for each user.
+        const facilityUsersToNotify = users.filter(
+          (u) => u.facilityId === submissionData.facilityId && (u.role === "Facility User" || u.role === "Facility Admin")
+        );
+
         if (facilityUsersToNotify.length > 0) {
           facilityUsersToNotify.forEach((userToNotify) => {
             const notificationRef = doc(collection(db, "notifications"));
+            const periodText = submissionData.morbidityWeek
+              ? `Morbidity Week ${submissionData.morbidityWeek}`
+              : `the month of ${new Date(submissionData.submissionYear, submissionData.submissionMonth - 1).toLocaleString('default', { month: 'long' })}`;
+
             batch.set(notificationRef, {
               userId: userToNotify.id,
               title: `Submission Rejected: ${submissionData.programName}`,
-              message: `Your submission for Morbidity Week ${submissionData.morbidityWeek} was rejected. Reason: "${reason}"`,
+              message: `Your submission for ${periodText} was rejected. Reason: "${reason}". Please resubmit.`,
               timestamp: serverTimestamp(),
               isRead: false,
-              relatedSubmissionId: submissionId, // Optional: for linking later
+              relatedSubmissionId: submissionId,
             });
           });
         }
 
         await batch.commit();
-        toast.error("Submission has been rejected and the user(s) have been notified.");
+        await logAudit(db, user, "Reject Submission", { submissionId: submissionId, reason: reason });
+        toast.success("Submission rejected and user notified.", { id: toastId });
+      } else {
+        toast.error("Submission not found.", { id: toastId });
       }
     } catch (error) {
-      console.error("Error rejecting submission: ", error);
-      toast.error("An error occurred while rejecting the submission.");
+      console.error("Error rejecting submission:", error);
+      toast.error(`Error rejecting submission: ${error.message}`, { id: toastId });
     } finally {
       setRejectionModalState({ isOpen: false, submissionId: null });
     }
@@ -317,7 +357,9 @@ export default function App() {
           try {
             await deleteObject(fileRef);
           } catch (storageError) {
-            console.error("Could not delete file from storage, continuing with Firestore deletion.", storageError);
+            if (storageError.code !== 'storage/object-not-found') {
+              console.error("Could not delete file from storage, continuing with Firestore deletion.", storageError);
+            }
           }
         }
       }
@@ -333,9 +375,44 @@ export default function App() {
   };
 
   const handleAddAnnouncement = async (title, message) => {
-    await addDoc(collection(db, "announcements"), { title, message, timestamp: serverTimestamp(), author: user.name });
-    await logAudit(db, user, "Create Announcement", { title });
-    toast.success("Announcement posted!");
+    if (!title.trim() || !message.trim()) {
+      toast.error("Title and message cannot be empty.");
+      return;
+    }
+
+    const toastId = toast.loading("Posting announcement...");
+    const batch = writeBatch(db);
+
+    const announcementRef = doc(collection(db, "announcements"));
+    batch.set(announcementRef, {
+      title,
+      message,
+      timestamp: serverTimestamp(),
+      author: user.name,
+    });
+
+    const usersToNotify = users.filter((u) => u.id !== user.uid);
+    usersToNotify.forEach((userToNotify) => {
+      const notificationRef = doc(collection(db, "notifications"));
+      batch.set(notificationRef, {
+        userId: userToNotify.id,
+        title: `New Announcement: ${title}`,
+        message: message,
+        timestamp: serverTimestamp(),
+        isRead: false,
+        relatedAnnouncementId: announcementRef.id,
+      });
+    });
+
+    try {
+      await batch.commit();
+      await logAudit(db, user, "Create Announcement", { title });
+      toast.success("Announcement posted and users notified!", { id: toastId });
+      setAnnouncementModalOpen(false);
+    } catch (error) {
+      console.error("Error posting announcement:", error);
+      toast.error("Failed to post announcement.", { id: toastId });
+    }
   };
 
   const handleDeleteAnnouncement = (announcementId) => {
@@ -389,7 +466,7 @@ export default function App() {
   };
 
   const handleApproveDeletion = async (subId) => {
-    await handleDeleteSubmission(subId); // Reuse the main deletion logic
+    await handleDeleteSubmission(subId);
   };
 
   const handleDenyDeletionRequest = async (subId) => {
@@ -424,6 +501,25 @@ export default function App() {
     await batch.commit().catch((err) => console.error("Failed to mark notifications as read", err));
   };
 
+  const handleClearAllNotifications = async () => {
+    if (!user || userNotifications.length === 0) return;
+
+    const toastId = toast.loading("Clearing notifications...");
+    const batch = writeBatch(db);
+    userNotifications.forEach((notification) => {
+      const notifRef = doc(db, "notifications", notification.id);
+      batch.delete(notifRef);
+    });
+
+    try {
+      await batch.commit();
+      toast.success("All notifications cleared.", { id: toastId });
+    } catch (error) {
+      console.error("Error clearing notifications:", error);
+      toast.error("Failed to clear notifications.", { id: toastId });
+    }
+  };
+
   const renderPage = () => {
     const loggedInUserDetails = { ...user, ...users.find((u) => u.id === user.uid) };
     const activePrograms = programs.filter((p) => p.active !== false);
@@ -439,7 +535,6 @@ export default function App() {
             <FacilityDashboard
               user={loggedInUserDetails}
               allPrograms={activePrograms}
-              submissions={submissions}
               db={db}
             />
           );
@@ -477,13 +572,12 @@ export default function App() {
         );
       case "reports":
         if (user.permissions?.canExportData)
-          return <ReportsPage programs={programsForUser} submissions={submissions} users={users} user={loggedInUserDetails} />;
+          return <ReportsPage programs={programsForUser} users={users} user={loggedInUserDetails} />;
         break;
       case "databank":
         return (
           <DatabankPage
             user={loggedInUserDetails}
-            submissions={submissions}
             programs={programs}
             facilities={facilities}
             db={db}
@@ -512,7 +606,7 @@ export default function App() {
           );
         break;
       case "submissions":
-        return <SubmissionsHistory user={loggedInUserDetails} submissions={submissions} onDelete={handleDeleteSubmission} />;
+        return <SubmissionsHistory user={loggedInUserDetails} db={db} onDelete={handleDeleteSubmission} />;
       case "profile":
         return <ProfilePage user={loggedInUserDetails} auth={auth} db={db} setUser={setUser} />;
       case "audit":
@@ -539,7 +633,7 @@ export default function App() {
     );
   };
 
-  if (loading) {
+  if (loading || isLoggingOut) {
     return <LoadingScreen />;
   }
 
@@ -559,12 +653,11 @@ export default function App() {
                 <Header
                   user={loggedInUserDetails}
                   onLogout={handleLogout}
-                  announcements={announcements}
-                  onAddAnnouncement={handleAddAnnouncement}
-                  onDeleteAnnouncement={handleDeleteAnnouncement}
+                  onAddAnnouncement={() => setAnnouncementModalOpen(true)}
                   notifications={userNotifications}
                   unreadNotificationsCount={unreadNotificationsCount}
                   onMarkNotificationsAsRead={handleMarkNotificationsAsRead}
+                  onClearAllNotifications={handleClearAllNotifications}
                 />
                 <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
                   {renderPage()}
@@ -582,6 +675,11 @@ export default function App() {
                 isOpen={rejectionModalState.isOpen}
                 onClose={() => setRejectionModalState({ isOpen: false, submissionId: null })}
                 onConfirm={handleRejectWithReason}
+              />
+              <AnnouncementModal
+                isOpen={isAnnouncementModalOpen}
+                onClose={() => setAnnouncementModalOpen(false)}
+                onPost={handleAddAnnouncement}
               />
             </div>
           );
