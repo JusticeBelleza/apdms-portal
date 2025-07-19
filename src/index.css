@@ -1,3 +1,36 @@
+/* src/index.css */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Custom CSS to hide scrollbar while keeping content scrollable */
+.hide-scrollbar::-webkit-scrollbar {
+    width: 0.5em; /* You can set this to 0 for completely invisible */
+    height: 0.5em; /* For horizontal scrollbar */
+}
+
+.hide-scrollbar::-webkit-scrollbar-thumb {
+    background-color: transparent; /* Makes the draggable part invisible */
+}
+
+.hide-scrollbar::-webkit-scrollbar-track {
+    background-color: transparent; /* Makes the track invisible */
+}
+
+/* For Firefox */
+.hide-scrollbar {
+    scrollbar-width: none; /* Hides the scrollbar */
+}
+
+/* For Internet Explorer and Edge (legacy) */
+.hide-scrollbar {
+    -ms-overflow-style: none; /* Hides the scrollbar */
+}
+
+/* You can optionally add a hover state if you want the scrollbar to appear only when hovered,
+   but for "hiding" it, the above is sufficient.
+.hide-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+}
+*/
