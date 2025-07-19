@@ -1,6 +1,9 @@
-// src/components/dashboards/PhoAdminDashboard.js
 import React, { useState, useMemo, useEffect } from "react";
 import { Check, X } from "lucide-react";
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import ConfirmationModal from '../modals/ConfirmationModal';
+import RejectionModal from '../modals/RejectionModal';
+import toast from 'react-hot-toast';
 
 // --- Helper Functions for Date Calculation ---
 const getMorbidityWeekRange = () => {
@@ -22,7 +25,15 @@ const getMonthRange = () => {
     return { start: startOfMonth, end: endOfMonth };
 };
 
-const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) => {
+const PhoAdminDashboard = ({ user, programs, submissions }) => {
+    // --- State Management ---
+    const [activeProgramId, setActiveProgramId] = useState(null);
+    const [modalState, setModalState] = useState({ type: null, submissionId: null }); // 'approve' or 'reject'
+
+    // --- Secure Cloud Function Setup ---
+    const functions = getFunctions();
+    const processSubmission = httpsCallable(functions, 'processSubmission');
+
     const assignedPrograms = useMemo(() => user.assignedPrograms || [], [user.assignedPrograms]);
 
     const programsToDisplayTabs = useMemo(() => {
@@ -32,14 +43,11 @@ const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) =
         return programs.filter(p => assignedPrograms.includes(p.id));
     }, [programs, assignedPrograms]);
 
-    const [activeProgramId, setActiveProgramId] = useState(null);
-
     useEffect(() => {
         if (!activeProgramId && programsToDisplayTabs.length > 0) {
             setActiveProgramId(programsToDisplayTabs[0].id);
         }
     }, [programsToDisplayTabs, activeProgramId]);
-
 
     const stats = useMemo(() => {
         if (!activeProgramId) {
@@ -83,6 +91,40 @@ const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) =
         );
     }, [submissions, activeProgramId]);
 
+    // --- SECURE HANDLERS WITH TOAST NOTIFICATIONS ---
+    const handleConfirm = async () => {
+        if (modalState.type !== 'approve' || !modalState.submissionId) return;
+        const submissionId = modalState.submissionId;
+        setModalState({ type: null, submissionId: null }); // Close modal immediately
+
+        const promise = processSubmission({ submissionId, newStatus: 'approved' });
+
+        toast.promise(promise, {
+            loading: 'Approving submission...',
+            success: 'Submission approved successfully!',
+            error: (err) => `Approval failed: ${err.message}`,
+        });
+    };
+
+    const handleDeny = async (rejectionReason) => {
+        if (modalState.type !== 'reject' || !modalState.submissionId) return;
+        const submissionId = modalState.submissionId;
+        setModalState({ type: null, submissionId: null }); // Close modal immediately
+
+        const promise = processSubmission({
+            submissionId,
+            newStatus: 'rejected',
+            rejectionReason,
+        });
+
+        toast.promise(promise, {
+            loading: 'Rejecting submission...',
+            success: 'Submission rejected successfully!',
+            error: (err) => `Rejection failed: ${err.message}`,
+        });
+    };
+
+
     return (
         <div className="p-4 sm:p-6">
             <h1 className="text-2xl font-bold text-gray-800 mb-6">PHO Dashboard</h1>
@@ -111,7 +153,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) =
             <div className="bg-white p-6 rounded-lg shadow-md">
                 {/* Tab Navigation */}
                 <div className="border-b border-gray-200">
-                    <div className="overflow-x-auto hide-scrollbar"> {/* This hides scrollbar for tabs */}
+                    <div className="overflow-x-auto scrollbar-hide">
                         <nav className="-mb-px flex space-x-8" aria-label="Tabs">
                             {programsToDisplayTabs.map((program) => (
                                 <button
@@ -130,7 +172,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) =
                 <div className="pt-6">
                     <h2 className="text-xl font-semibold mb-4">Pending Submissions</h2>
                     {pendingSubmissionsForTable.length > 0 ? (
-                        <div className="overflow-x-auto hide-scrollbar"> {/* ADDED 'hide-scrollbar' here for the table */}
+                        <div className="overflow-x-auto">
                             <table className="min-w-full divide-y divide-gray-200">
                                 <thead className="bg-gray-50">
                                     <tr>
@@ -152,10 +194,10 @@ const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) =
                                                 <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline mr-4">
                                                     View File
                                                 </a>
-                                                <button onClick={() => onConfirm(sub.id)} className="p-2 rounded-full bg-green-100 text-green-600 hover:bg-green-200 mr-2">
+                                                <button onClick={() => setModalState({ type: 'approve', submissionId: sub.id })} className="p-2 rounded-full bg-green-100 text-green-600 hover:bg-green-200 mr-2">
                                                     <Check className="w-4 h-4" />
                                                 </button>
-                                                <button onClick={() => onDeny(sub.id)} className="p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200">
+                                                <button onClick={() => setModalState({ type: 'reject', submissionId: sub.id })} className="p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200">
                                                     <X className="w-4 h-4" />
                                                 </button>
                                             </td>
@@ -169,6 +211,25 @@ const PhoAdminDashboard = ({ user, programs, submissions, onConfirm, onDeny }) =
                     )}
                 </div>
             </div>
+
+            {/* Modals */}
+            {modalState.type === 'approve' && (
+                <ConfirmationModal
+                    isOpen={true}
+                    onClose={() => setModalState({ type: null, submissionId: null })}
+                    onConfirm={handleConfirm}
+                    title="Confirm Approval"
+                    message="Are you sure you want to approve this submission?"
+                />
+            )}
+
+            {modalState.type === 'reject' && (
+                <RejectionModal
+                    isOpen={true}
+                    onClose={() => setModalState({ type: null, submissionId: null })}
+                    onConfirm={handleDeny}
+                />
+            )}
         </div>
     );
 };

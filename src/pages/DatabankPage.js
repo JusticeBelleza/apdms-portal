@@ -18,15 +18,14 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
     setLoading(true);
     let submissionsQuery;
 
-    // Base query for confirmed submissions, ordered by most recent first
+    // --- FIX: Query for status == "approved" instead of confirmed == true ---
     const baseQuery = query(
       collection(db, "submissions"),
-      where("confirmed", "==", true),
+      where("status", "==", "approved"), 
       orderBy("timestamp", "desc")
     );
 
     // If user is a facility user/admin, only show their facility's data.
-    // Otherwise, admins and other roles can see all confirmed submissions.
     if (user.role === "Facility User" || user.role === "Facility Admin") {
       submissionsQuery = query(baseQuery, where("facilityId", "==", user.facilityId));
     } else {
@@ -96,7 +95,8 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
         MorbidityWeek: sub.morbidityWeek || "N/A",
         SubmissionMonth: sub.submissionMonth || "N/A",
         SubmissionYear: sub.submissionYear || "N/A",
-        Status: sub.confirmed ? "Approved" : "Pending",
+        // --- FIX: Check sub.status instead of sub.confirmed ---
+        Status: sub.status === "approved" ? "Approved" : sub.status,
       };
     });
   }, [filteredSubmissions, programs, facilities]);

@@ -32,7 +32,6 @@ import LoginScreen from "./components/layout/LoginScreen";
 import Sidebar from "./components/layout/Sidebar";
 import Header from "./components/layout/Header";
 import ConfirmationModal from "./components/modals/ConfirmationModal";
-import RejectionModal from "./components/modals/RejectionModal";
 import AnnouncementModal from "./components/modals/AnnouncementModal";
 
 // Dashboard Components
@@ -71,11 +70,6 @@ export default function App() {
 
   const [showDeletionConfirmation, setShowDeletionConfirmation] = useState(false);
   const [deletionInfo, setDeletionInfo] = useState({ subId: null, action: null });
-
-  const [rejectionModalState, setRejectionModalState] = useState({
-    isOpen: false,
-    submissionId: null,
-  });
 
   const [isAnnouncementModalOpen, setAnnouncementModalOpen] = useState(false);
 
@@ -209,16 +203,23 @@ export default function App() {
       ),
     ];
     
-    // UPDATED: Changed from "Waiting for Approval" to "pending"
-    if (user.role === "PHO Admin" || user.role === "Super Admin") {
-      const submissionsQuery = query(collection(db, "submissions"), where("status", "==", "pending"));
+    // This now fetches all submissions for all relevant roles.
+    // The filtering logic is handled inside the respective dashboard components.
+    if (user.role === "PHO Admin" || user.role === "Super Admin" || user.role === "Facility Admin") {
+      const submissionsQuery = query(collection(db, "submissions"));
       listeners.push(
         onSnapshot(submissionsQuery, (snapshot) => {
           setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
         })
       );
     } else {
-      setSubmissions([]);
+      // For Facility User, only fetch their own submissions.
+      const submissionsQuery = query(collection(db, "submissions"), where("userId", "==", user.uid));
+       listeners.push(
+        onSnapshot(submissionsQuery, (snapshot) => {
+          setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        })
+      );
     }
 
     listenerUnsubscribes.current = listeners;
@@ -265,75 +266,6 @@ export default function App() {
     }
     setIsLoggingOut(true);
     setUser(null);
-  };
-
-  const handleConfirmSubmission = async (submissionId) => {
-    const subDocRef = doc(db, "submissions", submissionId);
-    await setDoc(subDocRef, { confirmed: true, status: "approved" }, { merge: true });
-    toast.success("Submission Approved!");
-  };
-
-  const handleOpenRejectionModal = (submissionId) => {
-    setRejectionModalState({ isOpen: true, submissionId });
-  };
-
-  const handleRejectWithReason = async (reason) => {
-    const { submissionId } = rejectionModalState;
-    if (!submissionId || !reason.trim()) {
-      toast.error("A reason is required for rejection.");
-      return;
-    }
-
-    const toastId = toast.loading("Rejecting submission...");
-    const submissionDocRef = doc(db, "submissions", submissionId);
-
-    try {
-      const submissionDoc = await getDoc(submissionDocRef);
-
-      if (submissionDoc.exists()) {
-        const submissionData = submissionDoc.data();
-        const batch = writeBatch(db);
-
-        batch.update(submissionDocRef, {
-          status: "rejected",
-          confirmed: false,
-          rejectionReason: reason,
-        });
-
-        const facilityUsersToNotify = users.filter(
-          (u) => u.facilityId === submissionData.facilityId && (u.role === "Facility User" || u.role === "Facility Admin")
-        );
-
-        if (facilityUsersToNotify.length > 0) {
-          facilityUsersToNotify.forEach((userToNotify) => {
-            const notificationRef = doc(collection(db, "notifications"));
-            const periodText = submissionData.morbidityWeek
-              ? `Morbidity Week ${submissionData.morbidityWeek}`
-              : `the month of ${new Date(submissionData.submissionYear, submissionData.submissionMonth - 1).toLocaleString('default', { month: 'long' })}`;
-
-            batch.set(notificationRef, {
-              userId: userToNotify.id,
-              title: `Submission Rejected: ${submissionData.programName}`,
-              message: `Your submission for ${periodText} was rejected. Reason: "${reason}". Please resubmit.`,
-              timestamp: serverTimestamp(),
-              isRead: false,
-              relatedSubmissionId: submissionId,
-            });
-          });
-        }
-
-        await batch.commit();
-        await logAudit(db, user, "Reject Submission", { submissionId: submissionId, reason: reason });
-        toast.success("Submission rejected and user notified.", { id: toastId });
-      } else {
-        toast.error("Submission not found.", { id: toastId });
-      }
-    } catch (error) {
-      console.error("Error rejecting submission:", error);
-      toast.error(`Error rejecting submission: ${error.message}`, { id: toastId });
-    } finally {
-      setRejectionModalState({ isOpen: false, submissionId: null });
-    }
   };
 
   const handleDeleteSubmission = async (subId) => {
@@ -542,9 +474,6 @@ export default function App() {
               user={loggedInUserDetails}
               programs={programs}
               submissions={submissions}
-              users={users}
-              onConfirm={handleConfirmSubmission}
-              onDeny={handleOpenRejectionModal}
             />
           );
         if (user.role === "Facility Admin")
@@ -563,7 +492,6 @@ export default function App() {
             programs={programsForUser}
             submissions={submissions}
             users={users}
-            onConfirm={handleConfirmSubmission}
             user={loggedInUserDetails}
             onNavigate={setPage}
           />
@@ -668,11 +596,6 @@ export default function App() {
                 onConfirm={executeDeletion}
                 title="Confirm Action"
                 message="Are you sure you want to proceed with this action? This cannot be undone."
-              />
-              <RejectionModal
-                isOpen={rejectionModalState.isOpen}
-                onClose={() => setRejectionModalState({ isOpen: false, submissionId: null })}
-                onConfirm={handleRejectWithReason}
               />
               <AnnouncementModal
                 isOpen={isAnnouncementModalOpen}
