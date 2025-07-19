@@ -88,10 +88,12 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {allPrograms.map((program) => {
           const submission = getSubmissionForPeriod(program);
-          const isWaiting = submission && submission.status === "Waiting for Approval";
-          const isApproved = submission && submission.status === "Approved";
-          const isRejected = submission && submission.status === "Rejected";
-          const isLocked = isWaiting || isApproved;
+          // UPDATED: Changed from "Waiting for Approval" to "pending"
+          const isPending = submission && submission.status === "pending";
+          const isApproved = submission && submission.status === "approved";
+          const isRejected = submission && submission.status === "rejected";
+          // UPDATED: The lock should now be based on the isPending state
+          const isLocked = isPending || isApproved;
 
           const period = getSubmissionPeriod(program);
           const submissionPeriodText =
@@ -134,7 +136,8 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                   className={`w-full flex items-center justify-center px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
                     isApproved
                       ? "bg-green-100 text-green-700 cursor-not-allowed"
-                      : isWaiting
+                      // UPDATED: Check for isPending
+                      : isPending
                       ? "bg-yellow-100 text-yellow-800 cursor-not-allowed"
                       : isRejected
                       ? "bg-red-500 text-white hover:bg-red-600"
@@ -146,10 +149,11 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                       <CheckCircle className="w-4 h-4 mr-2" />
                       Approved
                     </>
-                  ) : isWaiting ? (
+                  // UPDATED: Check for isPending and change button text
+                  ) : isPending ? (
                     <>
                       <Clock className="w-4 h-4 mr-2" />
-                      Waiting for Approval
+                      Pending Approval
                     </>
                   ) : isRejected ? (
                     <>

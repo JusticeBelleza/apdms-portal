@@ -1,0 +1,31 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Note: Accessing Firestore from storage rules is not directly supported.
+    // We will secure this based on user authentication and pathing.
+    
+    match /users/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == userId && fileName == 'profile.jpg';
+    }
+
+    // Rule for pending submissions
+    match /submissions/pending/{facilityId}/{allPaths=**} {
+      allow read, write: if isSignedIn() && request.auth.token.facilityId == facilityId;
+    }
+
+    // Rule for approved submissions
+    match /submissions/approved/{allPaths=**} {
+      allow read: if isSignedIn();
+      // No one can write directly to the 'approved' folder.
+      // This must be handled by a Cloud Function in a real-world scenario.
+      allow write: if false; 
+    }
+  }
+}

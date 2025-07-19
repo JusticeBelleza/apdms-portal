@@ -3,33 +3,31 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // HELPER FUNCTIONS
+    // --- HELPER FUNCTIONS ---
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function getUserData(userId) {
-      return get(/databases/$(database)/documents/users/$(userId)).data;
-    }
-
     function getRequestingUserData() {
-      return getUserData(request.auth.uid);
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
     function isSuperAdmin() {
       return getRequestingUserData().role == 'Super Admin';
     }
+    
+    function isPhoAdmin() {
+        return getRequestingUserData().role == 'PHO Admin';
+    }
 
     function hasPermission(permission) {
-      // Super Admins have all permissions implicitly.
-      // For other roles, check the permissions document.
       return isSuperAdmin() || get(/databases/$(database)/documents/permissions/$(getRequestingUserData().role)).data[permission] == true;
     }
 
 
+    // --- COLLECTION RULES ---
+
     // USERS
-    // Users can update their own data.
-    // Only users with 'canManageUsers' permission can create, update, or delete other users.
     match /users/{userId} {
       allow read: if isSignedIn();
       allow update: if isSignedIn() && (request.auth.uid == userId || hasPermission('canManageUsers'));
@@ -37,53 +35,62 @@ service cloud.firestore {
     }
 
     // FACILITIES
-    // All signed-in users can read the facility list.
-    // Only users with 'canManageFacilities' can write.
     match /facilities/{facilityId} {
         allow read: if isSignedIn();
         allow write: if isSignedIn() && hasPermission('canManageFacilities');
     }
 
     // PROGRAMS
-    // All signed-in users can read the program list.
-    // Only users with 'canManagePrograms' can write.
     match /programs/{programId} {
         allow read: if isSignedIn();
         allow write: if isSignedIn() && hasPermission('canManagePrograms');
     }
 
     // SUBMISSIONS
-    // Users can create submissions.
-    // Users can only update submissions linked to their own facility.
-    // Users with 'canConfirmSubmissions' permission can update any submission.
-    // Only Super Admins can delete submissions.
     match /submissions/{submissionId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() && (hasPermission('canConfirmSubmissions') || getRequestingUserData().facilityId == resource.data.facilityId);
-      allow delete: if isSignedIn() && isSuperAdmin();
+      // Allow creation only if the status is 'pending' and the user ID matches.
+      allow create: if isSignedIn() 
+                    && request.resource.data.status == 'pending' 
+                    && request.resource.data.userId == request.auth.uid;
+      
+      allow read: if isSignedIn() && (
+                    isSuperAdmin() || 
+                    isPhoAdmin() || 
+                    request.auth.uid == resource.data.userId || 
+                    getRequestingUserData().facilityId == resource.data.facilityId
+                  );
+                  
+      // Allow updates only by admins who can confirm submissions.
+      // They can change the status from 'pending' to 'approved' or 'rejected'.
+      allow update: if isSignedIn() && hasPermission('canConfirmSubmissions')
+                    && resource.data.status == 'pending'
+                    && (request.resource.data.status == 'approved' || request.resource.data.status == 'rejected');
+
+      allow delete: if isSignedIn() && (isSuperAdmin() || isPhoAdmin() || request.auth.uid == resource.data.userId);
     }
 
     // ANNOUNCEMENTS
-    // All signed-in users can read.
-    // Only Super Admins can create and delete.
     match /announcements/{announcementId} {
         allow read: if isSignedIn();
-        allow create, delete: if isSignedIn() && isSuperAdmin();
+        allow create, delete: if isSignedIn() && (isSuperAdmin() || isPhoAdmin());
     }
 
     // AUDIT LOG
-    // Only users with 'canViewAuditLog' can read.
-    // Writes should be handled by secure server functions, but we allow client writes for simplicity.
-    match /audit_log/{logId} {
+    match /audit_logs/{logId} {
         allow read: if isSignedIn() && hasPermission('canViewAuditLog');
         allow write: if isSignedIn();
     }
 
     // PERMISSIONS
-    // Only users with 'canManagePermissions' can read or write.
     match /permissions/{roleId} {
-        allow read, write: if isSignedIn() && hasPermission('canManagePermissions');
+        allow read: if isSignedIn();
+        allow write: if isSignedIn() && hasPermission('canManagePermissions');
+    }
+    
+    // NOTIFICATIONS
+    match /notifications/{notificationId} {
+      allow create: if isSignedIn() && (isPhoAdmin() || isSuperAdmin());
+      allow read, update, delete: if isSignedIn() && request.auth.uid == resource.data.userId;
     }
   }
 }

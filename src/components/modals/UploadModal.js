@@ -37,7 +37,9 @@ const UploadModal = ({ isOpen, onClose, program, user, db, submissionPeriod }) =
       submissionPeriod.type === "monthly"
         ? `${submissionPeriod.month}`
         : `W${submissionPeriod.week}`;
-    const storagePath = `submissions/${user.facilityId}/${program.id}/${submissionPeriod.year}/${periodPath}/${file.name}`;
+    
+    // UPDATED: Added 'pending/' to the storage path
+    const storagePath = `submissions/pending/${user.facilityId}/${program.id}/${submissionPeriod.year}/${periodPath}/${file.name}`;
     const fileRef = ref(storage, storagePath);
     const uploadTask = uploadBytesResumable(fileRef, file);
 
@@ -68,7 +70,8 @@ const UploadModal = ({ isOpen, onClose, program, user, db, submissionPeriod }) =
           fileType: file.type,
           fileSize: file.size,
           timestamp: serverTimestamp(),
-          status: "Waiting for Approval",
+          // UPDATED: Changed status to 'pending'
+          status: "pending",
           confirmed: false,
           submissionYear: submissionPeriod.year,
           isZeroCase: false,
@@ -112,7 +115,8 @@ const UploadModal = ({ isOpen, onClose, program, user, db, submissionPeriod }) =
         fileType: null,
         fileSize: 0,
         timestamp: serverTimestamp(),
-        status: "Waiting for Approval",
+        // UPDATED: Changed status to 'pending'
+        status: "pending",
         confirmed: false,
         submissionYear: submissionPeriod.year,
         isZeroCase: true,
@@ -136,7 +140,6 @@ const UploadModal = ({ isOpen, onClose, program, user, db, submissionPeriod }) =
       setIsUploading(false);
     }
   };
-
 
   const submissionPeriodText =
     submissionPeriod.type === "monthly"

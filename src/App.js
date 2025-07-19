@@ -135,8 +135,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // This effect handles the actual sign-out AFTER the user state has been cleared
-    // and components have had a chance to unmount and run their cleanup functions.
     if (isLoggingOut && user === null) {
         const performSignOut = async () => {
             try {
@@ -147,10 +145,9 @@ export default function App() {
                 toast.error("An error occurred during sign out.");
             } finally {
                 setPage("dashboard");
-                setIsLoggingOut(false); // Reset for next time
+                setIsLoggingOut(false);
             }
         };
-        // A small timeout allows the React render cycle to complete before signing out.
         setTimeout(performSignOut, 50);
     }
   }, [user, isLoggingOut]);
@@ -211,9 +208,10 @@ export default function App() {
         }
       ),
     ];
-
+    
+    // UPDATED: Changed from "Waiting for Approval" to "pending"
     if (user.role === "PHO Admin" || user.role === "Super Admin") {
-      const submissionsQuery = query(collection(db, "submissions"), where("status", "==", "Waiting for Approval"));
+      const submissionsQuery = query(collection(db, "submissions"), where("status", "==", "pending"));
       listeners.push(
         onSnapshot(submissionsQuery, (snapshot) => {
           setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
@@ -271,7 +269,7 @@ export default function App() {
 
   const handleConfirmSubmission = async (submissionId) => {
     const subDocRef = doc(db, "submissions", submissionId);
-    await setDoc(subDocRef, { confirmed: true, status: "Approved" }, { merge: true });
+    await setDoc(subDocRef, { confirmed: true, status: "approved" }, { merge: true });
     toast.success("Submission Approved!");
   };
 
@@ -297,7 +295,7 @@ export default function App() {
         const batch = writeBatch(db);
 
         batch.update(submissionDocRef, {
-          status: "Rejected",
+          status: "rejected",
           confirmed: false,
           rejectionReason: reason,
         });

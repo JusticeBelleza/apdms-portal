@@ -5,7 +5,7 @@ const PhoAdminDashboard = ({ user, programs, submissions, users, onConfirm, onDe
   const assignedPrograms = user.assignedPrograms || [];
 
   const pendingSubmissions = submissions.filter(
-    (sub) => sub.status === "Waiting for Approval" && (assignedPrograms.length === 0 || assignedPrograms.includes(sub.programId))
+    (sub) => sub.status === "pending" && (assignedPrograms.length === 0 || assignedPrograms.includes(sub.programId))
   );
 
   return (
