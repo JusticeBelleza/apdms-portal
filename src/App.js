@@ -6,9 +6,6 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebas
 import {
   collection,
   getDoc,
-  getDocs,
-  addDoc,
-  setDoc,
   deleteDoc,
   doc,
   onSnapshot,
@@ -19,7 +16,7 @@ import {
   writeBatch,
   updateDoc,
 } from "firebase/firestore";
-import { getStorage, ref as storageRef, deleteObject } from "firebase/storage";
+import { ref as storageRef, deleteObject } from "firebase/storage";
 import { ref as rtdbRef, onValue, off, set, onDisconnect } from "firebase/database";
 import { auth, db, rtdb, storage } from "./firebase/config";
 
@@ -345,41 +342,6 @@ export default function App() {
     }
   };
 
-  const handleDeleteAnnouncement = (announcementId) => {
-    toast(
-      (t) => (
-        <div className="flex flex-col items-center gap-2 text-center">
-          <p className="font-bold text-gray-800">Delete this announcement?</p>
-          <p className="text-sm text-gray-600">This action cannot be undone.</p>
-          <div className="flex gap-3 mt-2">
-            <button
-              className="px-4 py-1 bg-red-600 text-white text-sm font-semibold rounded-md hover:bg-red-700"
-              onClick={() => {
-                const deletePromise = deleteDoc(doc(db, "announcements", announcementId));
-                toast.promise(deletePromise, {
-                  loading: "Deleting...",
-                  success: "Announcement deleted!",
-                  error: "Could not delete.",
-                });
-                logAudit(db, user, "Delete Announcement", { announcementId });
-                toast.dismiss(t.id);
-              }}
-            >
-              Confirm Delete
-            </button>
-            <button
-              className="px-4 py-1 bg-gray-200 text-gray-800 text-sm font-semibold rounded-md hover:bg-gray-300"
-              onClick={() => toast.dismiss(t.id)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ),
-      { duration: 6000 }
-    );
-  };
-
   const handleDeletionConfirm = (subId, action) => {
     setDeletionInfo({ subId, action });
     setShowDeletionConfirmation(true);
@@ -404,7 +366,7 @@ export default function App() {
     await updateDoc(subDocRef, { deletionRequest: null });
     toast.error("Deletion request denied.");
   };
-
+  
   const markAnnouncementsAsRead = async () => {
     if (!user || unreadAnnouncements === 0) return;
     const userDocRef = doc(db, "users", user.uid);
@@ -413,9 +375,9 @@ export default function App() {
     try {
       await updateDoc(userDocRef, { seenAnnouncements: announcementIds });
       setUser((prevUser) => ({ ...prevUser, seenAnnouncements: announcementIds }));
-      setUnreadAnnouncements(0);
     } catch (err) {
       console.error("Failed to mark announcements as read:", err);
+      toast.error("Could not mark announcements as read.");
     }
   };
 
@@ -498,7 +460,7 @@ export default function App() {
         );
       case "reports":
         if (user.permissions?.canExportData)
-          return <ReportsPage programs={programsForUser} users={users} user={loggedInUserDetails} />;
+          return <ReportsPage programs={programsForUser} users={users} user={loggedInUserDetails} submissions={submissions} />;
         break;
       case "databank":
         return (
@@ -582,6 +544,8 @@ export default function App() {
                   onAddAnnouncement={() => setAnnouncementModalOpen(true)}
                   notifications={userNotifications}
                   unreadNotificationsCount={unreadNotificationsCount}
+                  unreadAnnouncements={unreadAnnouncements}
+                  onMarkAnnouncementsAsRead={markAnnouncementsAsRead}
                   onMarkNotificationsAsRead={handleMarkNotificationsAsRead}
                   onClearAllNotifications={handleClearAllNotifications}
                 />
@@ -595,7 +559,7 @@ export default function App() {
                 onClose={() => setShowDeletionConfirmation(false)}
                 onConfirm={executeDeletion}
                 title="Confirm Action"
-                message="Are you sure you want to proceed with this action? This cannot be undone."
+                message="Are you sure you want to proceed with this action? This should not be undone."
               />
               <AnnouncementModal
                 isOpen={isAnnouncementModalOpen}
