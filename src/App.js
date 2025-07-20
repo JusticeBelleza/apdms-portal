@@ -185,10 +185,10 @@ export default function App() {
         const fetchedUsers = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         
         const roleOrder = {
-          'Super Admin': 1,
-          'PHO Admin': 2,
-          'Facility Admin': 3,
-          'Facility User': 4
+          'Super Admin': 4,
+          'PHO Admin': 3,
+          'Facility Admin': 2,
+          'Facility User': 1
         };
 
         fetchedUsers.sort((a, b) => {
@@ -458,6 +458,7 @@ export default function App() {
               user={loggedInUserDetails}
               programs={programs}
               submissions={submissions}
+              users={users} // <-- FIX: Added users prop
             />
           );
         if (user.role === "Facility Admin")
@@ -483,7 +484,6 @@ export default function App() {
         );
       case "reports":
         if (user.permissions?.canExportData)
-          // --- FIX: Added the submissions prop ---
           return <ReportsPage programs={activePrograms} users={users} submissions={submissions} />;
         break;
       case "databank":

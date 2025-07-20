@@ -48,7 +48,6 @@ service cloud.firestore {
 
     // SUBMISSIONS
     match /submissions/{submissionId} {
-      // Allow creation only if the status is 'pending' and the user ID matches.
       allow create: if isSignedIn() 
                     && request.resource.data.status == 'pending' 
                     && request.resource.data.userId == request.auth.uid;
@@ -60,8 +59,6 @@ service cloud.firestore {
                     getRequestingUserData().facilityId == resource.data.facilityId
                   );
                   
-      // Allow updates only by admins who can confirm submissions.
-      // They can change the status from 'pending' to 'approved' or 'rejected'.
       allow update: if isSignedIn() && hasPermission('canConfirmSubmissions')
                     && resource.data.status == 'pending'
                     && (request.resource.data.status == 'approved' || request.resource.data.status == 'rejected');
@@ -91,6 +88,12 @@ service cloud.firestore {
     match /notifications/{notificationId} {
       allow create: if isSignedIn() && (isPhoAdmin() || isSuperAdmin());
       allow read, update, delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+    }
+
+    // --- NEW: SYSTEM ERRORS ---
+    match /system_errors/{errorId} {
+        allow read: if isSuperAdmin();
+        allow write: if false; // Only Cloud Functions can write errors
     }
   }
 }

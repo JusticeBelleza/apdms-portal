@@ -1,4 +1,3 @@
-// src/components/modals/ProgramFormModal.js
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
 
@@ -6,11 +5,12 @@ const ProgramFormModal = ({ program, onClose, onSave }) => {
     const [formData, setFormData] = useState({
         name: program?.name || '',
         frequency: program?.frequency || 'Monthly',
-        type: program?.type || 'upload',
-        reportTypes: program?.reportTypes || ['Quarterly', 'Annual'],
+        // 'type' is removed as it's now defaulted to file upload
+        reportTypes: program?.reportTypes || ['Monthly Summary'], // Default to a sensible option
     });
 
-    const allReportTypes = ['Morbidity Week', 'Morbidity Month', 'Morbidity Year', 'Quarterly', 'Annual'];
+    // --- FIX: Updated the list of available report types ---
+    const allReportTypes = ['Weekly Summary', 'Monthly Summary', 'Quarterly Summary', 'Annual Summary'];
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -30,7 +30,8 @@ const ProgramFormModal = ({ program, onClose, onSave }) => {
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        onSave(formData);
+        // Add the default submission type before saving
+        onSave({ ...formData, type: 'upload' });
     };
 
     return (
@@ -43,28 +44,23 @@ const ProgramFormModal = ({ program, onClose, onSave }) => {
                         <label className="block text-sm font-medium text-gray-700">Program Name</label>
                         <input type="text" name="name" value={formData.name} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                         <div>
-                            <label className="block text-sm font-medium text-gray-700">Frequency</label>
-                            <select name="frequency" value={formData.frequency} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
-                                <option>Weekly</option>
-                                <option>Monthly</option>
-                                <option>Quarterly</option>
-                            </select>
-                        </div>
-                         <div>
-                            <label className="block text-sm font-medium text-gray-700">Submission Type</label>
-                            <select name="type" value={formData.type} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
-                                <option value="upload">File Upload</option>
-                                <option value="external">Mark as Submitted</option>
-                            </select>
-                        </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Frequency</label>
+                        {/* --- FIX: Added "Annually" to the frequency dropdown --- */}
+                        <select name="frequency" value={formData.frequency} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
+                            <option>Weekly</option>
+                            <option>Monthly</option>
+                            <option>Quarterly</option>
+                            <option>Annually</option>
+                        </select>
                     </div>
+                    {/* --- FIX: Removed the "Submission Type" dropdown --- */}
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Report Types</label>
-                        <select multiple value={formData.reportTypes} onChange={handleReportTypeChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm">
+                        <select multiple value={formData.reportTypes} onChange={handleReportTypeChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm h-32">
                             {allReportTypes.map(type => <option key={type} value={type}>{type}</option>)}
                         </select>
+                        <p className="text-xs text-gray-500 mt-1">Hold Ctrl (or Cmd on Mac) to select multiple types.</p>
                     </div>
                     <div className="mt-6 flex justify-end space-x-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
