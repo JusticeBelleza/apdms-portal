@@ -4,8 +4,8 @@ import { Printer, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { CSVLink } from 'react-csv';
 
-// The 'submissions' prop is now accepted here.
-const ReportsPage = ({ programs, users, submissions }) => {
+// --- FIX: Added default empty arrays to props to prevent crash on initial render ---
+const ReportsPage = ({ programs = [], users = [], submissions = [] }) => {
     const [reportType, setReportType] = useState('');
     const [year, setYear] = useState(new Date().getFullYear());
     const [quarter, setQuarter] = useState(1);
@@ -95,7 +95,6 @@ const ReportsPage = ({ programs, users, submissions }) => {
         
         // Filter the submissions passed via props
         const relevantSubmissions = submissions.filter(s => {
-            // **THE FIX**: Check for status === 'approved' instead of confirmed === true
             const isApproved = s.status === 'approved';
             if (!isApproved) return false;
 

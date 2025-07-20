@@ -184,15 +184,13 @@ export default function App() {
       onSnapshot(collection(db, "users"), (snapshot) => {
         const fetchedUsers = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         
-        // Define role hierarchy for sorting
         const roleOrder = {
-          'Super Admin': 4,
-          'PHO Admin': 3,
-          'Facility Admin': 2,
-          'Facility User': 1
+          'Super Admin': 1,
+          'PHO Admin': 2,
+          'Facility Admin': 3,
+          'Facility User': 4
         };
 
-        // Sort users by role hierarchy, then by name
         fetchedUsers.sort((a, b) => {
           const orderA = roleOrder[a.role] || 99;
           const orderB = roleOrder[b.role] || 99;
@@ -220,7 +218,6 @@ export default function App() {
       ),
     ];
     
-    // --- FIX: Added specific query for Facility Admin role ---
     if (user.role === "PHO Admin" || user.role === "Super Admin") {
       const submissionsQuery = query(collection(db, "submissions"));
       listeners.push(
@@ -486,7 +483,8 @@ export default function App() {
         );
       case "reports":
         if (user.permissions?.canExportData)
-          return <ReportsPage programs={activePrograms} users={users} user={loggedInUserDetails} />;
+          // --- FIX: Added the submissions prop ---
+          return <ReportsPage programs={activePrograms} users={users} submissions={submissions} />;
         break;
       case "databank":
         return (
