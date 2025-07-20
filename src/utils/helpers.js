@@ -1,4 +1,3 @@
-// src/utils/helpers.js
 import React from 'react';
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { FileText, FileSpreadsheet, Database, Clock, Ban, HelpCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
@@ -117,19 +116,25 @@ export const generateMorbidityWeeks = () => {
     return weeks;
 };
 
-export const logAudit = async (db, user, action, details) => {
-    try {
-        await addDoc(collection(db, "audit_logs"), {
-            timestamp: serverTimestamp(),
-            userId: user.uid,
-            userName: user.name,
-            userRole: user.role,
-            action: action,
-            details: details,
-        });
-    } catch (error) {
-        console.error("Error writing to audit log:", error);
-    }
+// This is the updated logAudit function that includes facilityId
+export const logAudit = async (db, user, action, details = {}) => {
+  if (!user) {
+    console.error("Audit log failed: User object is missing.");
+    return;
+  }
+  try {
+    await addDoc(collection(db, 'audit_logs'), {
+      timestamp: serverTimestamp(),
+      performedBy: user.uid,
+      userName: user.name,
+      userRole: user.role,
+      facilityId: user.facilityId || null, // Add the facilityId to the log
+      action,
+      details,
+    });
+  } catch (error) {
+    console.error("Error writing to audit log:", error);
+  }
 };
 
 export const exportToCSV = (data, filename) => {

@@ -181,9 +181,29 @@ export default function App() {
       onSnapshot(collection(db, "programs"), (snapshot) =>
         setPrograms(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
       ),
-      onSnapshot(collection(db, "users"), (snapshot) =>
-        setUsers(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
-      ),
+      onSnapshot(collection(db, "users"), (snapshot) => {
+        const fetchedUsers = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        
+        // Define role hierarchy for sorting
+        const roleOrder = {
+          'Super Admin': 4,
+          'PHO Admin': 3,
+          'Facility Admin': 2,
+          'Facility User': 1
+        };
+
+        // Sort users by role hierarchy, then by name
+        fetchedUsers.sort((a, b) => {
+          const orderA = roleOrder[a.role] || 99;
+          const orderB = roleOrder[b.role] || 99;
+          if (orderA !== orderB) {
+            return orderA - orderB;
+          }
+          return a.name.localeCompare(b.name);
+        });
+
+        setUsers(fetchedUsers);
+      }),
       onSnapshot(collection(db, "facilities"), (snapshot) =>
         setFacilities(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })))
       ),
@@ -200,17 +220,25 @@ export default function App() {
       ),
     ];
     
-    // This now fetches all submissions for all relevant roles.
-    // The filtering logic is handled inside the respective dashboard components.
-    if (user.role === "PHO Admin" || user.role === "Super Admin" || user.role === "Facility Admin") {
+    // --- FIX: Added specific query for Facility Admin role ---
+    if (user.role === "PHO Admin" || user.role === "Super Admin") {
       const submissionsQuery = query(collection(db, "submissions"));
       listeners.push(
         onSnapshot(submissionsQuery, (snapshot) => {
           setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
         })
       );
+    } else if (user.role === "Facility Admin") {
+      const submissionsQuery = query(collection(db, "submissions"), where("facilityId", "==", user.facilityId));
+      listeners.push(
+        onSnapshot(submissionsQuery, (snapshot) => {
+          setSubmissions(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        }, (error) => {
+          console.error("Error fetching facility submissions: ", error);
+          toast.error("Could not load facility submissions.");
+        })
+      );
     } else {
-      // For Facility User, only fetch their own submissions.
       const submissionsQuery = query(collection(db, "submissions"), where("userId", "==", user.uid));
        listeners.push(
         onSnapshot(submissionsQuery, (snapshot) => {
@@ -366,7 +394,7 @@ export default function App() {
     await updateDoc(subDocRef, { deletionRequest: null });
     toast.error("Deletion request denied.");
   };
-  
+
   const markAnnouncementsAsRead = async () => {
     if (!user || unreadAnnouncements === 0) return;
     const userDocRef = doc(db, "users", user.uid);
@@ -375,9 +403,9 @@ export default function App() {
     try {
       await updateDoc(userDocRef, { seenAnnouncements: announcementIds });
       setUser((prevUser) => ({ ...prevUser, seenAnnouncements: announcementIds }));
+      setUnreadAnnouncements(0);
     } catch (err) {
       console.error("Failed to mark announcements as read:", err);
-      toast.error("Could not mark announcements as read.");
     }
   };
 
@@ -415,11 +443,7 @@ export default function App() {
   const renderPage = () => {
     const loggedInUserDetails = { ...user, ...users.find((u) => u.id === user.uid) };
     const activePrograms = programs.filter((p) => p.active !== false);
-    const programsForUser =
-      user.role === "PHO Admin"
-        ? activePrograms.filter((p) => loggedInUserDetails.assignedPrograms?.includes(p.id))
-        : activePrograms;
-
+    
     switch (page) {
       case "dashboard":
         if (user.role === "Facility User")
@@ -428,6 +452,7 @@ export default function App() {
               user={loggedInUserDetails}
               allPrograms={activePrograms}
               db={db}
+              onLogout={handleLogout}
             />
           );
         if (user.role === "PHO Admin")
@@ -446,12 +471,13 @@ export default function App() {
               submissions={submissions}
               users={users}
               onlineStatuses={onlineStatuses}
+              onNavigate={setPage}
             />
           );
         return (
           <AdminDashboard
             facilities={facilities}
-            programs={programsForUser}
+            programs={activePrograms}
             submissions={submissions}
             users={users}
             user={loggedInUserDetails}
@@ -460,7 +486,7 @@ export default function App() {
         );
       case "reports":
         if (user.permissions?.canExportData)
-          return <ReportsPage programs={programsForUser} users={users} user={loggedInUserDetails} submissions={submissions} />;
+          return <ReportsPage programs={activePrograms} users={users} user={loggedInUserDetails} />;
         break;
       case "databank":
         return (
@@ -498,8 +524,7 @@ export default function App() {
       case "profile":
         return <ProfilePage user={loggedInUserDetails} auth={auth} db={db} setUser={setUser} />;
       case "audit":
-        if (user.permissions?.canViewAuditLog) return <AuditLogPage db={db} />;
-        break;
+        return <AuditLogPage db={db} user={loggedInUserDetails} />;
       case "deletion-requests":
         if (user.role === "Super Admin")
           return (
@@ -544,10 +569,10 @@ export default function App() {
                   onAddAnnouncement={() => setAnnouncementModalOpen(true)}
                   notifications={userNotifications}
                   unreadNotificationsCount={unreadNotificationsCount}
-                  unreadAnnouncements={unreadAnnouncements}
-                  onMarkAnnouncementsAsRead={markAnnouncementsAsRead}
                   onMarkNotificationsAsRead={handleMarkNotificationsAsRead}
                   onClearAllNotifications={handleClearAllNotifications}
+                  unreadAnnouncementsCount={unreadAnnouncements}
+                  onMarkAnnouncementsAsRead={markAnnouncementsAsRead}
                 />
                 <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
                   {renderPage()}
@@ -559,7 +584,7 @@ export default function App() {
                 onClose={() => setShowDeletionConfirmation(false)}
                 onConfirm={executeDeletion}
                 title="Confirm Action"
-                message="Are you sure you want to proceed with this action? This should not be undone."
+                message="Are you sure you want to proceed with this action? This cannot be undone."
               />
               <AnnouncementModal
                 isOpen={isAnnouncementModalOpen}
