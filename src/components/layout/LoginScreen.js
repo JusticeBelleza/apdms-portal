@@ -1,4 +1,4 @@
-// src/components/layout/LoginScreen.js
+
 import React, { useState } from 'react';
 
 const LoginScreen = ({ onLogin }) => {
