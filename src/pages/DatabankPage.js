@@ -11,8 +11,9 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
   const [programFilter, setProgramFilter] = useState("all");
   const [facilityFilter, setFacilityFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("all");
-  const [yearFilter, setYearFilter] = useState(new Date().getFullYear().toString()); // Default to current year
+  const [yearFilter, setYearFilter] = useState(new Date().getFullYear().toString());
   const [weekFilter, setWeekFilter] = useState("all");
+  const [hideZeroCases, setHideZeroCases] = useState(false); // State for the new toggle
 
   useEffect(() => {
     if (!user || !db) return;
@@ -74,6 +75,10 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
   const filteredSubmissions = useMemo(() => {
     return submissions
       .filter((sub) => {
+        if (hideZeroCases && sub.isZeroCase) {
+            return false;
+        }
+
         const program = programs.find((p) => p.id === sub.programId);
         const programName = sub.programName || program?.name || "";
         const facility = facilities.find((f) => f.id === sub.facilityId);
@@ -106,7 +111,7 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
 
         return matchesSearch && matchesProgram && matchesFacility && matchesYear && matchesPeriod;
       })
-  }, [submissions, searchTerm, programFilter, facilityFilter, monthFilter, yearFilter, weekFilter, programs, facilities]);
+  }, [submissions, searchTerm, programFilter, facilityFilter, monthFilter, yearFilter, weekFilter, hideZeroCases, programs, facilities]);
 
   const csvData = useMemo(() => {
     return filteredSubmissions.map((sub) => {
@@ -140,7 +145,6 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
       if (yearFilter === 'all' || selectedYearNum === currentYear) {
           return Array.from({ length: getMorbidityWeek() }, (_, i) => i + 1);
       }
-      // For past years, show all 52 weeks
       return Array.from({ length: 52 }, (_, i) => i + 1);
   }, [yearFilter]);
 
@@ -153,7 +157,7 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
         </div>
 
         <div className="bg-white p-4 rounded-lg shadow-sm mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-center">
             <div className="lg:col-span-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -239,6 +243,19 @@ const DatabankPage = ({ user, programs, facilities, db, onSuperAdminDelete }) =>
                 ))}
               </select>
             </div>
+          </div>
+          {/* --- FIX: Zero Case Toggle is now always visible --- */}
+          <div className="mt-4 flex items-center justify-end">
+              <label htmlFor="hide-zero-case" className="flex items-center cursor-pointer">
+                  <div className="relative">
+                      <input type="checkbox" id="hide-zero-case" className="sr-only" checked={hideZeroCases} onChange={() => setHideZeroCases(!hideZeroCases)} />
+                      <div className={`block w-10 h-6 rounded-full transition ${hideZeroCases ? 'bg-primary' : 'bg-gray-200'}`}></div>
+                      <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition ${hideZeroCases ? 'translate-x-full' : ''}`}></div>
+                  </div>
+                  <div className="ml-3 text-gray-700 text-sm font-medium">
+                      Hide Zero Case Reports
+                  </div>
+              </label>
           </div>
         </div>
 

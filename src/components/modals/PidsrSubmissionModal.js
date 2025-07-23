@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, CheckCircle } from 'lucide-react';
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, serverTimestamp, writeBatch, doc } from "firebase/firestore";
 import toast from 'react-hot-toast';
 
@@ -34,7 +34,7 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
 
   const initialFormState = useMemo(() => {
     return PIDSR_DISEASES.reduce((acc, disease) => {
-        acc[disease] = { file: null, isZeroCase: false, status: 'new' };
+        acc[disease] = { file: null, isZeroCase: false, status: 'new', progress: 0, isUploading: false };
         return acc;
     }, {});
   }, []);
@@ -56,8 +56,10 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
                 docId: doc.id,
                 rejectionReason: doc.rejectionReason || null,
                 fileName: doc.fileName,
+                progress: 0,
+                isUploading: false,
               }
-            : { file: null, isZeroCase: false, status: 'new' };
+            : { file: null, isZeroCase: false, status: 'new', progress: 0, isUploading: false };
           return acc;
         }, {});
         setFormState(newState);
@@ -89,13 +91,16 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
 
   const handleFileChange = (e, diseaseName) => {
     const file = e.target.files[0];
-    if (file && file.name.endsWith('.mdb')) {
+    const allowedExtensions = ['.mdb', '.xlsx', '.xls', '.csv'];
+    const fileExtension = file.name.substring(file.name.lastIndexOf('.'));
+
+    if (file && allowedExtensions.includes(fileExtension.toLowerCase())) {
       setFormState(prevState => ({
         ...prevState,
         [diseaseName]: { ...prevState[diseaseName], file: file, isZeroCase: false },
       }));
     } else {
-      toast.error("Please select a valid .mdb file.");
+      toast.error("Please select a valid .mdb, .xlsx, .xls, or .csv file.");
       e.target.value = null;
     }
   };
@@ -125,23 +130,47 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
     const toastId = toast.loading(isResubmission ? 'Resubmitting reports...' : 'Submitting reports...');
     
     try {
-        if (isResubmission) {
-            const itemsToProcess = Object.entries(formState).filter(([, data]) => data.status === 'rejected' && (data.file || data.isZeroCase));
-            const batch = writeBatch(db);
-
-            const uploadPromises = itemsToProcess.map(async ([disease, data]) => {
-                const docRef = doc(db, "submissions", data.docId);
-                let downloadURL = null;
-
-                if (data.file) {
-                    const periodPath = submissionPeriod.type === "monthly" ? `${submissionPeriod.month}` : `W${submissionPeriod.week}`;
-                    const storagePath = `submissions/pending/${user.facilityId}/PIDSR/${submissionPeriod.year}/${periodPath}/${disease}-${data.file.name}`;
-                    const fileRef = ref(storage, storagePath);
-                    
-                    const snapshot = await uploadBytes(fileRef, data.file);
-                    downloadURL = await getDownloadURL(snapshot.ref);
+        const itemsToProcess = Object.entries(formState).filter(([, data]) => isResubmission ? data.status === 'rejected' && (data.file || data.isZeroCase) : (data.file || data.isZeroCase));
+        
+        const uploadPromises = itemsToProcess.map(([disease, data]) => {
+            return new Promise(async (resolve, reject) => {
+                if (!data.file) { // Handle zero case reports
+                    resolve({ disease, data, downloadURL: null });
+                    return;
                 }
 
+                setFormState(prev => ({ ...prev, [disease]: { ...prev[disease], isUploading: true }}));
+
+                const periodPath = submissionPeriod.type === "monthly" ? `${submissionPeriod.month}` : `W${submissionPeriod.week}`;
+                const storagePath = `submissions/pending/${user.facilityId}/PIDSR/${submissionPeriod.year}/${periodPath}/${disease}-${data.file.name}`;
+                const fileRef = ref(storage, storagePath);
+                const uploadTask = uploadBytesResumable(fileRef, data.file);
+
+                uploadTask.on('state_changed', 
+                    (snapshot) => {
+                        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                        setFormState(prev => ({ ...prev, [disease]: { ...prev[disease], progress: progress }}));
+                    },
+                    (error) => {
+                        console.error("Upload error for", disease, error);
+                        setFormState(prev => ({ ...prev, [disease]: { ...prev[disease], isUploading: false }}));
+                        reject(error);
+                    },
+                    async () => {
+                        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                        setFormState(prev => ({ ...prev, [disease]: { ...prev[disease], isUploading: false }}));
+                        resolve({ disease, data, downloadURL });
+                    }
+                );
+            });
+        });
+
+        const uploadedFilesData = await Promise.all(uploadPromises);
+
+        if (isResubmission) {
+            const batch = writeBatch(db);
+            uploadedFilesData.forEach(({ data, downloadURL }) => {
+                const docRef = doc(db, "submissions", data.docId);
                 batch.update(docRef, {
                     status: "pending",
                     fileURL: downloadURL,
@@ -153,14 +182,11 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
                     rejectionReason: null,
                 });
             });
-
-            await Promise.all(uploadPromises);
             await batch.commit();
             toast.success('Resubmitted reports successfully!', { id: toastId });
-
         } else {
             const batchId = `pidsr-${user.facilityId}-${Date.now()}`;
-            const submissionPromises = Object.entries(formState).map(async ([disease, data]) => {
+            const addDocPromises = uploadedFilesData.map(({ disease, data, downloadURL }) => {
                 const submissionData = {
                     batchId,
                     programId: 'PIDSR',
@@ -176,25 +202,17 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
                     isZeroCase: data.isZeroCase,
                     submissionMonth: submissionPeriod.type === "monthly" ? submissionPeriod.month : new Date().getMonth() + 1,
                     morbidityWeek: submissionPeriod.type === "weekly" ? submissionPeriod.week : null,
+                    fileURL: downloadURL,
+                    fileName: data.file ? data.file.name : "Zero Case Report",
+                    fileType: data.file ? data.file.type : null,
+                    fileSize: data.file ? data.file.size : 0,
                 };
-
-                if (data.file) {
-                    const periodPath = submissionPeriod.type === "monthly" ? `${submissionPeriod.month}` : `W${submissionPeriod.week}`;
-                    const storagePath = `submissions/pending/${user.facilityId}/PIDSR/${submissionPeriod.year}/${periodPath}/${disease}-${data.file.name}`;
-                    const fileRef = ref(storage, storagePath);
-                    const snapshot = await uploadBytes(fileRef, data.file);
-                    submissionData.fileURL = await getDownloadURL(snapshot.ref);
-                    submissionData.fileName = data.file.name;
-                    submissionData.fileType = data.file.type;
-                    submissionData.fileSize = data.file.size;
-                } else {
-                    submissionData.fileName = "Zero Case Report";
-                }
-                await addDoc(collection(db, "submissions"), submissionData);
+                return addDoc(collection(db, "submissions"), submissionData);
             });
-            await Promise.all(submissionPromises);
+            await Promise.all(addDocPromises);
             toast.success('All reports submitted successfully!', { id: toastId });
         }
+
         setTimeout(onClose, 1500); 
     } catch (error) {
         toast.error(`Submission failed: ${error.message}`, { id: toastId });
@@ -211,7 +229,7 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
           <div className="flex justify-between items-start">
             <div>
               <h2 className="text-2xl font-bold text-gray-800 mb-2">PIDSR Program Submission</h2>
-              <p className="text-gray-600 text-sm">{isResubmission ? "Please correct and resubmit the rejected reports." : "For each disease, upload the corresponding `.mdb` file or mark it as a 'Zero Case Report'."}</p>
+              <p className="text-gray-600 text-sm">{isResubmission ? "Please correct and resubmit the rejected reports." : "For each disease, upload the corresponding file or mark it as a 'Zero Case Report'."}</p>
             </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-200">
               <X className="w-6 h-6 text-gray-500" />
@@ -252,24 +270,12 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
                             <div className="flex items-center space-x-2 w-full sm:w-auto">
                                {isApproved ? (
                                    <span className="font-semibold text-green-600 inline-flex items-center"><CheckCircle className="w-4 h-4 mr-2"/>Approved</span>
-                               ) : isRejected ? (
-                                   <>
-                                    <input
-                                        type="file"
-                                        id={`file-${disease}`}
-                                        accept=".mdb"
-                                        onChange={(e) => handleFileChange(e, disease)}
-                                        disabled={isSubmitting || diseaseData.isZeroCase}
-                                        className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100 disabled:opacity-50"
-                                    />
-                                    <button type="button" onClick={() => handleZeroCaseToggle(disease)} disabled={isSubmitting || !!diseaseData.file} className={`px-3 py-2 text-xs font-medium rounded-md ${diseaseData.isZeroCase ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700'}`}>Zero Case</button>
-                                   </>
                                ) : (
                                 <>
                                     <input
                                         type="file"
                                         id={`file-${disease}`}
-                                        accept=".mdb"
+                                        accept=".mdb,.xlsx,.xls,.csv"
                                         onChange={(e) => handleFileChange(e, disease)}
                                         disabled={isSubmitting || diseaseData.isZeroCase}
                                         className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100 disabled:opacity-50"
@@ -284,8 +290,13 @@ export default function PidsrSubmissionModal({ isOpen, onClose, db, storage, use
                                 <span className="font-bold">Rejected:</span> {diseaseData.rejectionReason || "No reason provided."}
                             </div>
                         )}
-                        {diseaseData.file && (
+                        {diseaseData.file && !diseaseData.isUploading && (
                             <p className="text-xs text-green-600 mt-2">New file selected: {diseaseData.file.name}</p>
+                        )}
+                        {diseaseData.isUploading && (
+                            <div className="mt-2 w-full bg-gray-200 rounded-full h-1.5">
+                                <div className="bg-blue-600 h-1.5 rounded-full" style={{width: `${diseaseData.progress}%`}}></div>
+                            </div>
                         )}
                     </div>
                 )
