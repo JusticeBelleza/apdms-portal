@@ -2,18 +2,19 @@ import React, { useState, useEffect } from "react";
 import { FileText, CheckCircle, Upload, XCircle, Clock, AlertCircle, LogOut } from "lucide-react";
 import { getMorbidityWeek } from "../../utils/helpers";
 import UploadModal from "../modals/UploadModal";
+import PidsrSubmissionModal from "../modals/PidsrSubmissionModal";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { signOut } from "firebase/auth";
-import { auth } from "../../firebase/config";
+import { auth, storage } from "../../firebase/config";
 
 const FacilityDashboard = ({ user, allPrograms, db }) => {
     const [isUploadModalOpen, setUploadModalOpen] = useState(false);
+    const [isPidsrModalOpen, setPidsrModalOpen] = useState(false);
     const [selectedProgram, setSelectedProgram] = useState(null);
     const [facilitySubmissions, setFacilitySubmissions] = useState([]);
+    const [batchToResubmit, setBatchToResubmit] = useState([]); // State to hold rejected batch documents
 
-    // --- FIX: Moved useEffect hook to the top level before any early returns ---
     useEffect(() => {
-        // The check for assigned programs will prevent this from running unnecessarily
         if (!user || !db || !user.assignedPrograms || user.assignedPrograms.length === 0) return;
 
         const submissionsQuery = query(
@@ -36,7 +37,6 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
         signOut(auth).catch(error => console.error("Logout Error:", error));
     };
 
-    // --- Check for assigned programs can now happen after all hooks are called ---
     if (!user.assignedPrograms || user.assignedPrograms.length === 0) {
         return (
             <div className="fixed inset-0 bg-gray-100 z-50 flex flex-col items-center justify-center p-6 text-center">
@@ -46,10 +46,7 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                     <p className="mt-2 text-gray-600">
                         You have not been assigned any programs yet. Please wait for your facility administrator to finish setting up your account.
                     </p>
-                    <button
-                        onClick={handleLogout}
-                        className="mt-6 w-full flex items-center justify-center px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary transition-colors"
-                    >
+                    <button onClick={handleLogout} className="mt-6 w-full flex items-center justify-center px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary transition-colors">
                         <LogOut className="w-4 h-4 mr-2" />
                         Go to Login Page
                     </button>
@@ -64,6 +61,9 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
     const currentYear = now.getFullYear();
 
     const getSubmissionPeriod = (program) => {
+        if (program && (program.id === 'PIDSR' || program.name.toUpperCase().includes('PIDSR'))) {
+            return { type: "weekly", week: currentMorbidityWeek, year: currentYear };
+        }
         if (program && program.name && program.name.toLowerCase().includes("rabies")) {
             return { type: "monthly", month: currentMonth, year: currentYear };
         }
@@ -72,45 +72,46 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
 
     const getSubmissionForPeriod = (program) => {
         const period = getSubmissionPeriod(program);
-        let submissionsForPeriod;
+        const isPidsr = program.id === 'PIDSR' || program.name.toUpperCase().includes('PIDSR');
 
-        if (period.type === "monthly") {
-            submissionsForPeriod = facilitySubmissions.filter(
-                (sub) =>
-                    sub.programId === program.id &&
-                    sub.submissionMonth === period.month &&
-                    sub.submissionYear === period.year
-            );
-        } else { // weekly
-            submissionsForPeriod = facilitySubmissions.filter(
-                (sub) =>
-                    sub.programId === program.id &&
-                    sub.morbidityWeek === period.week &&
-                    sub.submissionYear === period.year
-            );
+        const submissionsForPeriod = facilitySubmissions.filter(sub =>
+            (sub.programId === program.id || (isPidsr && sub.programId === 'PIDSR')) &&
+            sub.submissionYear === period.year &&
+            (period.type === 'monthly' ? sub.submissionMonth === period.month : sub.morbidityWeek === period.week)
+        );
+
+        if (submissionsForPeriod.length === 0) return null;
+
+        if (isPidsr) {
+            const batchId = submissionsForPeriod[0]?.batchId;
+            if (batchId) {
+                const allBatchDocs = facilitySubmissions.filter(s => s.batchId === batchId);
+                const hasRejection = allBatchDocs.some(d => d.status === 'rejected');
+                const isPending = allBatchDocs.some(d => d.status === 'pending');
+                
+                let status = 'approved';
+                if (isPending) status = 'pending';
+                if (hasRejection) status = 'rejected';
+
+                return { ...allBatchDocs[0], status, batchDocuments: allBatchDocs };
+            }
         }
-
-        if (submissionsForPeriod.length === 0) {
-            return null;
-        }
-
-        submissionsForPeriod.sort((a, b) => {
-            const timeA = a.timestamp?.toMillis() || 0;
-            const timeB = b.timestamp?.toMillis() || 0;
-            return timeB - timeA;
-        });
         
+        submissionsForPeriod.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
         return submissionsForPeriod[0];
     };
 
-    const handleOpenUploadModal = (program) => {
+    const handleOpenUploadModal = (program, submission) => {
         setSelectedProgram(program);
-        setUploadModalOpen(true);
+        if (program.id === 'PIDSR' || program.name.toUpperCase().includes('PIDSR')) {
+            setBatchToResubmit(submission?.batchDocuments || []);
+            setPidsrModalOpen(true);
+        } else {
+            setUploadModalOpen(true);
+        }
     };
     
-    // Filter to only show programs assigned to the user
     const assignedPrograms = allPrograms.filter(p => user.assignedPrograms.includes(p.id));
-
 
     return (
         <div className="p-4 sm:p-6">
@@ -129,19 +130,11 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                     const period = getSubmissionPeriod(program);
                     const submissionPeriodText =
                         period.type === "monthly"
-                            ? new Date(period.year, period.month - 1).toLocaleString("default", {
-                                month: "long",
-                                year: "numeric",
-                            })
+                            ? new Date(period.year, period.month - 1).toLocaleString("default", { month: "long", year: "numeric" })
                             : `Morbidity Week ${period.week}, ${period.year}`;
 
                     return (
-                        <div
-                            key={program.id}
-                            className={`bg-white rounded-xl shadow-md p-5 flex flex-col justify-between transition-all duration-300 ${
-                                isLocked ? "bg-gray-50" : "hover:shadow-lg hover:-translate-y-1"
-                            }`}
-                        >
+                        <div key={program.id} className={`bg-white rounded-xl shadow-md p-5 flex flex-col justify-between transition-all duration-300 ${isLocked ? "bg-gray-50" : "hover:shadow-lg hover:-translate-y-1"}`}>
                             <div>
                                 <div className="flex items-center mb-3">
                                     <div className="p-2 bg-primary-light rounded-full mr-3">
@@ -153,7 +146,7 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                                 <div className="text-xs text-gray-600 bg-gray-100 rounded-full px-3 py-1 inline-block">
                                     Submission for: <strong>{submissionPeriodText}</strong>
                                 </div>
-                                {isRejected && (
+                                {isRejected && submission?.rejectionReason && (
                                     <div className="mt-3 p-2 bg-red-100 text-red-700 rounded-lg text-xs">
                                         <p className="font-bold">Submission Rejected</p>
                                         <p>Reason: {submission.rejectionReason}</p>
@@ -162,39 +155,19 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                             </div>
                             <div className="mt-5">
                                 <button
-                                    onClick={() => handleOpenUploadModal(program)}
+                                    onClick={() => handleOpenUploadModal(program, submission)}
                                     disabled={isLocked}
                                     className={`w-full flex items-center justify-center px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${
-                                        isApproved
-                                            ? "bg-green-100 text-green-700 cursor-not-allowed"
-                                            : isPending
-                                            ? "bg-yellow-100 text-yellow-800 cursor-not-allowed"
-                                            : isRejected
-                                            ? "bg-red-500 text-white hover:bg-red-600"
-                                            : "bg-primary text-white hover:bg-secondary"
+                                        isApproved ? "bg-green-100 text-green-700 cursor-not-allowed"
+                                        : isPending ? "bg-yellow-100 text-yellow-800 cursor-not-allowed"
+                                        : isRejected ? "bg-red-500 text-white hover:bg-red-600"
+                                        : "bg-primary text-white hover:bg-secondary"
                                     }`}
                                 >
-                                    {isApproved ? (
-                                        <>
-                                            <CheckCircle className="w-4 h-4 mr-2" />
-                                            Approved
-                                        </>
-                                    ) : isPending ? (
-                                        <>
-                                            <Clock className="w-4 h-4 mr-2" />
-                                            Pending Approval
-                                        </>
-                                    ) : isRejected ? (
-                                        <>
-                                            <XCircle className="w-4 h-4 mr-2" />
-                                            Resubmit Report
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Upload className="w-4 h-4 mr-2" />
-                                            Submit Report
-                                        </>
-                                    )}
+                                    {isApproved ? (<><CheckCircle className="w-4 h-4 mr-2" /> Approved</>) 
+                                    : isPending ? (<><Clock className="w-4 h-4 mr-2" /> Pending Approval</>) 
+                                    : isRejected ? (<><XCircle className="w-4 h-4 mr-2" /> Resubmit Report</>) 
+                                    : (<><Upload className="w-4 h-4 mr-2" /> Submit Report</>)}
                                 </button>
                             </div>
                         </div>
@@ -210,6 +183,18 @@ const FacilityDashboard = ({ user, allPrograms, db }) => {
                     user={user}
                     db={db}
                     submissionPeriod={getSubmissionPeriod(selectedProgram)}
+                />
+            )}
+            
+            {isPidsrModalOpen && selectedProgram && (
+                <PidsrSubmissionModal
+                    isOpen={isPidsrModalOpen}
+                    onClose={() => setPidsrModalOpen(false)}
+                    db={db}
+                    storage={storage}
+                    user={user}
+                    submissionPeriod={getSubmissionPeriod(selectedProgram)}
+                    batchDocuments={batchToResubmit}
                 />
             )}
         </div>

@@ -35,89 +35,107 @@ exports.getSystemHealth = onCall(async (request) => {
 
 
 /**
- * Processes a submission and sends notifications.
+ * Processes a single submission or a batch of submissions and sends a consolidated notification.
  */
 exports.processSubmission = onCall(async (request) => {
-  if (!request.auth) {
-    throw new HttpsError("unauthenticated", "The function must be called while authenticated.");
-  }
-  const userDoc = await admin.firestore().collection('users').doc(request.auth.uid).get();
-  if (!userDoc.exists || userDoc.data().role !== 'PHO Admin') {
-    throw new HttpsError("permission-denied", "You do not have permission to perform this action.");
-  }
-
-  const { submissionId, newStatus, rejectionReason } = request.data;
-  if (!submissionId || !['approved', 'rejected'].includes(newStatus)) {
-      throw new HttpsError("invalid-argument", "Required data is missing or invalid.");
-  }
-
-  try {
-    const submissionRef = admin.firestore().collection('submissions').doc(submissionId);
-    await submissionRef.update({
-      status: newStatus,
-      rejectionReason: newStatus === 'rejected' ? rejectionReason : null,
-      processedBy: request.auth.uid,
-      processedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    const submissionDoc = await submissionRef.get();
-    if (!submissionDoc.exists) {
-      logger.error("Could not find submission after update.", { submissionId });
-      return { success: true, message: "Action succeeded, but post-action tasks failed." };
+    if (!request.auth) {
+        throw new HttpsError("unauthenticated", "The function must be called while authenticated.");
     }
-    const submissionData = submissionDoc.data();
-    const adminUserData = userDoc.data();
+    const userDoc = await admin.firestore().collection('users').doc(request.auth.uid).get();
+    if (!userDoc.exists || userDoc.data().role !== 'PHO Admin') {
+        throw new HttpsError("permission-denied", "You do not have permission to perform this action.");
+    }
 
-    await admin.firestore().collection('audit_logs').add({
-        action: `Submission ${newStatus}`,
-        performedBy: request.auth.uid,
-        userName: adminUserData.name,
-        userRole: adminUserData.role,
-        facilityId: submissionData.facilityId || null,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-        details: `${submissionData.programName} submission from ${submissionData.userName} was ${newStatus} by ${adminUserData.name}.`
-    });
+    // MODIFIED: Accepts an array of submissionIds
+    const { submissionIds, newStatus, rejectionReason } = request.data;
+    if (!submissionIds || !Array.isArray(submissionIds) || submissionIds.length === 0 || !['approved', 'rejected'].includes(newStatus)) {
+        throw new HttpsError("invalid-argument", "Required data is missing or invalid.");
+    }
 
-    // Notification logic...
-    const facilityId = submissionData.facilityId;
-    if (facilityId) {
-        const usersQuery = admin.firestore().collection('users').where('facilityId', '==', facilityId);
-        const usersSnapshot = await usersQuery.get();
-        if (!usersSnapshot.empty) {
-            const batch = admin.firestore().batch();
-            const notificationTitle = `Submission ${newStatus}: ${submissionData.programName}`;
-            const notificationMessage = newStatus === 'approved'
-                ? `Your submission for ${submissionData.programName} has been approved.`
-                : `Your submission for ${submissionData.programName} was rejected. Reason: "${rejectionReason}"`;
-
-            usersSnapshot.forEach(doc => {
-                const notificationRef = admin.firestore().collection('notifications').doc();
-                batch.set(notificationRef, {
-                    userId: doc.id,
-                    title: notificationTitle,
-                    message: notificationMessage,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                    isRead: false,
-                    relatedSubmissionId: submissionId,
-                });
-            });
-            await batch.commit();
-            logger.log(`Sent ${usersSnapshot.size} notifications for submission processing.`, { submissionId });
+    try {
+        const db = admin.firestore();
+        const batch = db.batch();
+        
+        const firstSubRef = db.collection('submissions').doc(submissionIds[0]);
+        const firstSubDoc = await firstSubRef.get();
+        if (!firstSubDoc.exists) {
+            throw new HttpsError("not-found", "The submission could not be found.");
         }
-    }
-    return { success: true, message: `Submission successfully ${newStatus} and notifications sent.` };
+        const submissionData = firstSubDoc.data();
 
-  } catch (error) {
-    logger.error("Error processing submission:", error);
-    await admin.firestore().collection('system_errors').add({
-        functionName: 'processSubmission',
-        errorMessage: error.message,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-        context: request.data
-    });
-    throw new HttpsError("internal", "An error occurred while processing the submission.");
-  }
+        submissionIds.forEach(id => {
+            const ref = db.collection('submissions').doc(id);
+            batch.update(ref, {
+                status: newStatus,
+                rejectionReason: newStatus === 'rejected' ? rejectionReason : null,
+                processedBy: request.auth.uid,
+                processedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        });
+        await batch.commit();
+
+        const adminUserData = userDoc.data();
+        await db.collection('audit_logs').add({
+            action: `Submission Batch ${newStatus}`,
+            performedBy: request.auth.uid,
+            userName: adminUserData.name,
+            userRole: adminUserData.role,
+            facilityId: submissionData.facilityId || null,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            details: `${submissionIds.length} reports for ${submissionData.programName} from ${submissionData.facilityName} were ${newStatus} by ${adminUserData.name}.`
+        });
+
+        // --- CONSOLIDATED NOTIFICATION LOGIC ---
+        const facilityId = submissionData.facilityId;
+        if (facilityId) {
+            const usersQuery = db.collection('users').where('facilityId', '==', facilityId);
+            const usersSnapshot = await usersQuery.get();
+            if (!usersSnapshot.empty) {
+                const notificationBatch = db.batch();
+                const count = submissionIds.length;
+                const programName = submissionData.programName;
+
+                const notificationTitle = `Submission Update: ${programName}`;
+                let notificationMessage;
+
+                if (newStatus === 'approved') {
+                    notificationMessage = count > 1 
+                        ? `Your batch of ${count} reports for ${programName} has been approved.`
+                        : `Your submission for "${submissionData.fileName}" has been approved.`;
+                } else {
+                    notificationMessage = count > 1
+                        ? `Your batch of ${count} reports for ${programName} was rejected. Reason: "${rejectionReason}"`
+                        : `Your submission for "${submissionData.fileName}" was rejected. Reason: "${rejectionReason}"`;
+                }
+
+                usersSnapshot.forEach(doc => {
+                    const notificationRef = db.collection('notifications').doc();
+                    notificationBatch.set(notificationRef, {
+                        userId: doc.id,
+                        title: notificationTitle,
+                        message: notificationMessage,
+                        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                        isRead: false,
+                        relatedSubmissionId: submissionData.batchId || submissionIds[0],
+                    });
+                });
+                await notificationBatch.commit();
+            }
+        }
+        return { success: true, message: `Successfully processed ${submissionIds.length} submissions.` };
+
+    } catch (error) {
+        logger.error("Error processing submission:", error);
+        await admin.firestore().collection('system_errors').add({
+            functionName: 'processSubmission',
+            errorMessage: error.message,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            context: request.data
+        });
+        throw new HttpsError("internal", "An error occurred while processing the submission.");
+    }
 });
+
 
 /**
  * Sets a custom role for a user.

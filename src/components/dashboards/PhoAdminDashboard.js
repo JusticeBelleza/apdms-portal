@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { Check, X, CheckCircle, Clock, AlertTriangle, MinusCircle } from "lucide-react";
+import { Check, X, CheckCircle, Clock, AlertTriangle, MinusCircle, File as FileIcon, ChevronDown, ChevronRight } from "lucide-react";
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import ConfirmationModal from '../modals/ConfirmationModal';
 import RejectionModal from '../modals/RejectionModal';
@@ -28,7 +28,9 @@ const getMonthRange = () => {
 
 const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }) => {
     const [activeProgramId, setActiveProgramId] = useState(null);
-    const [modalState, setModalState] = useState({ type: null, submissionId: null });
+    const [modalState, setModalState] = useState({ type: null, data: null });
+    const [expandedBatch, setExpandedBatch] = useState(null);
+    const [selectedDocuments, setSelectedDocuments] = useState([]);
 
     const functions = getFunctions();
     const processSubmission = httpsCallable(functions, 'processSubmission');
@@ -47,42 +49,77 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
             setActiveProgramId(programsToDisplayTabs[0].id);
         }
     }, [programsToDisplayTabs, activeProgramId]);
+    
+    const activeProgram = useMemo(() => programs.find(p => p.id === activeProgramId), [programs, activeProgramId]);
 
-    // --- Data processing for both stats and the new pie chart ---
+    const pendingSubmissionsForTable = useMemo(() => {
+        if (!activeProgramId) return [];
+        
+        const pendingSubs = submissions.filter(sub =>
+            sub.status === "pending" &&
+            (sub.programId === activeProgramId || (activeProgram?.name.toUpperCase().includes('PIDSR') && sub.programId === 'PIDSR'))
+        );
+
+        const grouped = pendingSubs.reduce((acc, sub) => {
+            const key = sub.batchId || sub.id;
+            if (!acc[key]) {
+                acc[key] = {
+                    id: key,
+                    isBatch: !!sub.batchId,
+                    facilityName: sub.facilityName,
+                    userName: sub.userName,
+                    timestamp: sub.timestamp,
+                    documents: [],
+                };
+            }
+            acc[key].documents.push(sub);
+            return acc;
+        }, {});
+
+        return Object.values(grouped);
+    }, [submissions, activeProgramId, activeProgram]);
+    
     const { stats, chartData } = useMemo(() => {
-        if (!activeProgramId) {
+        if (!activeProgramId || !activeProgram) {
             return { 
                 stats: { total: 0, approved: 0, rejected: 0, pending: 0 },
                 chartData: []
             };
         }
 
-        const activeProgram = programs.find(p => p.id === activeProgramId);
         let filteredSubs = [];
 
-        if (activeProgram) {
-            if (activeProgram.name === "PIDSR Program") {
-                const { start, end } = getMorbidityWeekRange();
-                filteredSubs = submissions.filter(sub => {
-                    const subDate = sub.timestamp?.toDate();
-                    return sub.programId === activeProgramId && subDate >= start && subDate <= end;
-                });
-            } else if (activeProgram.name === "Rabies Program") {
-                const { start, end } = getMonthRange();
-                filteredSubs = submissions.filter(sub => {
-                    const subDate = sub.timestamp?.toDate();
-                    return sub.programId === activeProgramId && subDate >= start && subDate <= end;
-                });
-            } else {
-                filteredSubs = submissions.filter(sub => sub.programId === activeProgramId);
-            }
+        if (activeProgram.name.toUpperCase().includes("PIDSR")) {
+            const { start, end } = getMorbidityWeekRange();
+            filteredSubs = submissions.filter(sub => {
+                const subDate = sub.timestamp?.toDate();
+                return (sub.programId === activeProgramId || sub.programId === 'PIDSR') && subDate >= start && subDate <= end;
+            });
+        } else if (activeProgram.name.toUpperCase().includes("RABIES")) {
+            const { start, end } = getMonthRange();
+            filteredSubs = submissions.filter(sub => {
+                const subDate = sub.timestamp?.toDate();
+                return sub.programId === activeProgramId && subDate >= start && subDate <= end;
+            });
+        } else {
+            filteredSubs = submissions.filter(sub => sub.programId === activeProgramId);
         }
+        
+        const submissionGroups = filteredSubs.reduce((acc, sub) => {
+            const key = sub.batchId || sub.id;
+            if (!acc[key]) {
+                acc[key] = sub.status;
+            }
+            return acc;
+        }, {});
+        const statuses = Object.values(submissionGroups);
+
 
         const calculatedStats = {
-            total: filteredSubs.length,
-            approved: filteredSubs.filter((sub) => sub.status === "approved").length,
-            rejected: filteredSubs.filter((sub) => sub.status === "rejected").length,
-            pending: filteredSubs.filter((sub) => sub.status === "pending").length,
+            total: statuses.length,
+            approved: statuses.filter(s => s === "approved").length,
+            rejected: statuses.filter(s => s === "rejected").length,
+            pending: statuses.filter(s => s === "pending").length,
         };
 
         const calculatedChartData = [
@@ -92,41 +129,28 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
         ].filter(item => item.value > 0);
 
         return { stats: calculatedStats, chartData: calculatedChartData };
-    }, [submissions, programs, activeProgramId]);
+    }, [submissions, activeProgram, activeProgramId]);
 
-    const pendingSubmissionsForTable = useMemo(() => {
-        if (!activeProgramId) return [];
-        return submissions.filter(sub =>
-            sub.status === "pending" &&
-            sub.programId === activeProgramId
-        );
-    }, [submissions, activeProgramId]);
 
-    // --- NEW: Calculate facility compliance status ---
     const facilityCompliance = useMemo(() => {
-        if (!activeProgramId || !users.length) return [];
+        if (!activeProgramId || !users.length || !activeProgram) return [];
 
-        const activeProgram = programs.find(p => p.id === activeProgramId);
-        if (!activeProgram) return [];
-
-        // Determine the date range for the current period
         let startDate, endDate;
-        if (activeProgram.name === "PIDSR Program") {
+        const isPidsr = activeProgram.name.toUpperCase().includes("PIDSR");
+        if (isPidsr) {
             const range = getMorbidityWeekRange();
             startDate = range.start;
             endDate = range.end;
-        } else if (activeProgram.name === "Rabies Program") {
+        } else if (activeProgram.name.toUpperCase().includes("RABIES")) {
             const range = getMonthRange();
             startDate = range.start;
             endDate = range.end;
         } else {
-            // For other programs, maybe we don't track compliance, or use a default like monthly
             const range = getMonthRange();
             startDate = range.start;
             endDate = range.end;
         }
 
-        // Find all unique facilities that are assigned this program
         const relevantFacilities = [...new Set(
             users
                 .filter(u => u.assignedPrograms?.includes(activeProgramId) && u.facilityName !== 'Provincial Health Office')
@@ -136,13 +160,12 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
         return relevantFacilities.map(facilityName => {
             const facilitySubmissions = submissions.filter(s => 
                 s.facilityName === facilityName && 
-                s.programId === activeProgramId &&
+                (s.programId === activeProgramId || (isPidsr && s.programId === 'PIDSR')) &&
                 s.timestamp?.toDate() >= startDate &&
                 s.timestamp?.toDate() <= endDate
             );
 
             if (facilitySubmissions.length > 0) {
-                // Find the most recent submission for the period
                 const latestSubmission = facilitySubmissions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate())[0];
                 return { name: facilityName, status: latestSubmission.status };
             } else {
@@ -150,42 +173,35 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
             }
         });
 
-    }, [activeProgramId, users, submissions, programs]);
+    }, [activeProgramId, users, submissions, activeProgram]);
 
-    const handleConfirm = async () => {
-        if (modalState.type !== 'approve' || !modalState.submissionId) return;
-        const submissionId = modalState.submissionId;
-        setModalState({ type: null, submissionId: null });
-
-        const promise = processSubmission({ submissionId, newStatus: 'approved' });
-        toast.promise(promise, {
-            loading: 'Approving submission...',
-            success: 'Submission approved successfully!',
-            error: (err) => `Approval failed: ${err.message}`,
+    const handleProcessSelected = (action, rejectionReason = '') => {
+        const promise = processSubmission({
+            submissionIds: selectedDocuments,
+            newStatus: action,
+            rejectionReason: action === 'rejected' ? rejectionReason : '',
         });
+
+        toast.promise(promise, {
+            loading: `${action === 'approved' ? 'Approving' : 'Rejecting'} ${selectedDocuments.length} reports...`,
+            success: `Selected reports ${action} successfully!`,
+            error: (err) => `Action failed: ${err.message}`,
+        });
+
+        setSelectedDocuments([]);
+        setModalState({ type: null, data: null });
     };
 
-    const handleDeny = async (rejectionReason) => {
-        if (modalState.type !== 'reject' || !modalState.submissionId) return;
-        const submissionId = modalState.submissionId;
-        setModalState({ type: null, submissionId: null });
-
-        const promise = processSubmission({
-            submissionId,
-            newStatus: 'rejected',
-            rejectionReason,
-        });
-        toast.promise(promise, {
-            loading: 'Rejecting submission...',
-            success: 'Submission rejected successfully!',
-            error: (err) => `Rejection failed: ${err.message}`,
-        });
+    const handleToggleSelect = (docId) => {
+        setSelectedDocuments(prev => 
+            prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]
+        );
     };
     
     const STATUS_COLORS = {
-        'Approved': '#10B981', // Green
-        'Pending': '#F59E0B',  // Yellow
-        'Rejected': '#EF4444', // Red
+        'Approved': '#10B981',
+        'Pending': '#F59E0B',
+        'Rejected': '#EF4444',
     };
 
     const ComplianceStatusBadge = ({ status }) => {
@@ -207,29 +223,26 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
         <div className="p-4 sm:p-6">
             <h1 className="text-2xl font-bold text-gray-800 mb-6">PHO Dashboard</h1>
 
-            {/* Main content grid */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-                {/* Left side: Stats and Pie Chart */}
                 <div className="lg:col-span-1 flex flex-col gap-6">
                     <div className="bg-white p-5 rounded-lg shadow-md">
-                         <h3 className="text-lg font-semibold text-gray-600 mb-4 text-center">Submissions Overview</h3>
-                         <div className="grid grid-cols-3 gap-4 text-center">
+                        <h3 className="text-lg font-semibold text-gray-600 mb-4 text-center">Submissions Overview</h3>
+                        <div className="grid grid-cols-3 gap-4 text-center">
                             <div className="p-2 rounded-lg bg-green-50">
                                 <p className="text-3xl font-bold text-green-600">{stats.approved}</p>
                                 <p className="text-xs font-medium text-green-700">Approved</p>
                             </div>
-                             <div className="p-2 rounded-lg bg-yellow-50">
+                            <div className="p-2 rounded-lg bg-yellow-50">
                                 <p className="text-3xl font-bold text-yellow-600">{stats.pending}</p>
                                 <p className="text-xs font-medium text-yellow-700">Pending</p>
                             </div>
-                             <div className="p-2 rounded-lg bg-red-50">
+                            <div className="p-2 rounded-lg bg-red-50">
                                 <p className="text-3xl font-bold text-red-600">{stats.rejected}</p>
                                 <p className="text-xs font-medium text-red-700">Rejected</p>
                             </div>
-                         </div>
+                        </div>
                     </div>
                     
-                    {/* Pie Chart */}
                     <div className="bg-white p-5 rounded-lg shadow-md">
                         <ResponsiveContainer width="100%" height={250} key={activeProgramId}>
                             <PieChart>
@@ -243,7 +256,6 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                                     dataKey="value"
                                     nameKey="name"
                                     label={({ name, percent }) => `${(percent * 100).toFixed(0)}%`}
-                                    isAnimationActive={true}
                                 >
                                     {chartData.map((entry, index) => (
                                         <Cell key={`cell-${index}`} fill={STATUS_COLORS[entry.name]} stroke={STATUS_COLORS[entry.name]} />
@@ -256,7 +268,6 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                     </div>
                 </div>
 
-                {/* Right side: Tabs and Table */}
                 <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
                     <div className="border-b border-gray-200">
                         <div className="overflow-x-auto scrollbar-hide">
@@ -264,7 +275,7 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                                 {programsToDisplayTabs.map((program) => (
                                     <button
                                         key={program.id}
-                                        onClick={() => setActiveProgramId(program.id)}
+                                        onClick={() => { setActiveProgramId(program.id); setSelectedDocuments([]); setExpandedBatch(null); }}
                                         className={`py-2 px-4 text-sm font-medium focus:outline-none whitespace-nowrap ${activeProgramId === program.id ? 'border-b-2 border-primary text-primary' : 'text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
                                     >
                                         {program.name}
@@ -275,7 +286,15 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                     </div>
 
                     <div className="pt-6">
-                        <h2 className="text-xl font-semibold mb-4">Pending Submissions</h2>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-semibold">Pending Submissions</h2>
+                            {selectedDocuments.length > 0 && (
+                                <div className="flex items-center space-x-2">
+                                    <button onClick={() => setModalState({ type: 'batch_approve' })} className="px-3 py-1 text-sm bg-green-500 text-white rounded-md hover:bg-green-600">Approve Selected ({selectedDocuments.length})</button>
+                                    <button onClick={() => setModalState({ type: 'batch_reject' })} className="px-3 py-1 text-sm bg-red-500 text-white rounded-md hover:bg-red-600">Reject Selected ({selectedDocuments.length})</button>
+                                </div>
+                            )}
+                        </div>
                         {pendingSubmissionsForTable.length > 0 ? (
                             <div className="overflow-x-auto">
                                 <table className="min-w-full divide-y divide-gray-200">
@@ -284,29 +303,79 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Facility</th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted By</th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
+                                    <tbody className="bg-white">
                                         {pendingSubmissionsForTable.map((sub) => (
-                                            <tr key={sub.id}>
-                                                <td className="px-6 py-4 whitespace-nowrap">{sub.facilityName}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap">{sub.userName}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    {sub.timestamp ? new Date(sub.timestamp.toDate()).toLocaleDateString() : "N/A"}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                                    <a href={sub.fileURL} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline mr-4">
-                                                        View File
-                                                    </a>
-                                                    <button onClick={() => setModalState({ type: 'approve', submissionId: sub.id })} className="p-2 rounded-full bg-green-100 text-green-600 hover:bg-green-200 mr-2">
-                                                        <Check className="w-4 h-4" />
-                                                    </button>
-                                                    <button onClick={() => setModalState({ type: 'reject', submissionId: sub.id })} className="p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200">
-                                                        <X className="w-4 h-4" />
-                                                    </button>
-                                                </td>
-                                            </tr>
+                                            <React.Fragment key={sub.id}>
+                                                <tr className="cursor-pointer hover:bg-gray-50" onClick={() => sub.isBatch && setExpandedBatch(expandedBatch === sub.id ? null : sub.id)}>
+                                                    <td className="px-6 py-4 whitespace-nowrap">{sub.facilityName}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">{sub.userName}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        {sub.timestamp ? new Date(sub.timestamp.toDate()).toLocaleDateString() : "N/A"}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        {sub.isBatch ? (
+                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                                                {expandedBatch === sub.id ? <ChevronDown className="w-4 h-4 mr-1.5" /> : <ChevronRight className="w-4 h-4 mr-1.5" />}
+                                                                Batch of {sub.documents.length}
+                                                            </span>
+                                                        ) : (
+                                                            <a href={sub.documents[0].fileURL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-primary hover:underline">
+                                                                <FileIcon className="w-4 h-4 mr-1.5" />
+                                                                View File
+                                                            </a>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                        <button onClick={(e) => { e.stopPropagation(); setSelectedDocuments(sub.isBatch ? sub.documents.map(d => d.id) : [sub.id]); setModalState({ type: 'batch_approve' }); }} className="p-2 rounded-full bg-green-100 text-green-600 hover:bg-green-200 mr-2">
+                                                            <Check className="w-4 h-4" />
+                                                        </button>
+                                                        <button onClick={(e) => { e.stopPropagation(); setSelectedDocuments(sub.isBatch ? sub.documents.map(d => d.id) : [sub.id]); setModalState({ type: 'batch_reject' }); }} className="p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200">
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                                {sub.isBatch && expandedBatch === sub.id && (
+                                                    <tr className="bg-gray-50">
+                                                        <td colSpan="5" className="px-6 py-4">
+                                                            <div className="pl-8">
+                                                                <table className="min-w-full">
+                                                                    <thead className="sr-only">
+                                                                        <tr><th>Select</th><th>Disease</th><th>File</th><th>Actions</th></tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {sub.documents.map(doc => {
+                                                                            const isSelected = selectedDocuments.includes(doc.id);
+                                                                            return (
+                                                                                <tr key={doc.id} className="border-b border-gray-200 last:border-b-0">
+                                                                                    <td className="py-2 pr-4 w-12">
+                                                                                        <input type="checkbox" className="rounded" checked={isSelected} onChange={() => handleToggleSelect(doc.id)} />
+                                                                                    </td>
+                                                                                    <td className="py-2 text-sm text-gray-800">{doc.diseaseName}</td>
+                                                                                    <td className="py-2 text-sm">
+                                                                                        {doc.isZeroCase ? (
+                                                                                            <span className="italic text-gray-500">Zero Case Report</span>
+                                                                                        ) : (
+                                                                                            <a href={doc.fileURL} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">View File</a>
+                                                                                        )}
+                                                                                    </td>
+                                                                                    <td className="py-2 text-right">
+                                                                                        <button onClick={() => { setSelectedDocuments([doc.id]); setModalState({ type: 'batch_approve' }); }} className="p-1 rounded-full bg-green-100 text-green-600 hover:bg-green-200 mr-2"><Check className="w-4 h-4" /></button>
+                                                                                        <button onClick={() => { setSelectedDocuments([doc.id]); setModalState({ type: 'batch_reject' }); }} className="p-1 rounded-full bg-red-100 text-red-600 hover:bg-red-200"><X className="w-4 h-4" /></button>
+                                                                                    </td>
+                                                                                </tr>
+                                                                            )
+                                                                        })}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </React.Fragment>
                                         ))}
                                     </tbody>
                                 </table>
@@ -316,10 +385,9 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                         )}
                     </div>
 
-                    {/* --- NEW: Facility Compliance Section --- */}
                     <div className="pt-6 mt-6 border-t">
-                         <h2 className="text-xl font-semibold mb-4">Facility Compliance</h2>
-                         {facilityCompliance.length > 0 ? (
+                        <h2 className="text-xl font-semibold mb-4">Facility Compliance</h2>
+                        {facilityCompliance.length > 0 ? (
                             <div className="overflow-x-auto">
                                 <table className="min-w-full divide-y divide-gray-200">
                                     <thead className="bg-gray-50">
@@ -340,28 +408,28 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                                     </tbody>
                                 </table>
                             </div>
-                         ) : (
+                        ) : (
                             <p className="text-gray-500">No facilities are assigned to this program.</p>
-                         )}
+                        )}
                     </div>
                 </div>
             </div>
 
-            {/* Modals */}
-            {modalState.type === 'approve' && (
+            {(modalState.type === 'batch_approve') && (
                 <ConfirmationModal
                     isOpen={true}
-                    onClose={() => setModalState({ type: null, submissionId: null })}
-                    onConfirm={handleConfirm}
-                    title="Confirm Approval"
-                    message="Are you sure you want to approve this submission?"
+                    onClose={() => setModalState({ type: null, data: null })}
+                    onConfirm={() => handleProcessSelected('approved')}
+                    title={`Approve ${selectedDocuments.length} Reports?`}
+                    message={`Are you sure you want to approve all ${selectedDocuments.length} selected reports? This action cannot be undone.`}
                 />
             )}
-            {modalState.type === 'reject' && (
+            {(modalState.type === 'batch_reject') && (
                 <RejectionModal
                     isOpen={true}
-                    onClose={() => setModalState({ type: null, submissionId: null })}
-                    onConfirm={handleDeny}
+                    onClose={() => setModalState({ type: null, data: null })}
+                    onConfirm={(reason) => handleProcessSelected('rejected', reason)}
+                    title={`Reject ${selectedDocuments.length} Reports?`}
                 />
             )}
         </div>
