@@ -32,28 +32,28 @@ const AddFacilityAdminModal = ({ onClose, facilities }) => {
 
         try {
             // Create a temporary, secondary auth instance to create a user without logging out the current admin
+            // A unique name is required for each new app instance.
             const tempApp = initializeApp(mainAuth.app.options, `secondary-auth-${Date.now()}`);
             const tempAuth = getAuth(tempApp);
 
             const userCredential = await createUserWithEmailAndPassword(tempAuth, formData.email, formData.password);
             const newUser = userCredential.user;
             
-            // --- Start of Fix ---
-            // Find the selected facility object from the facilities prop
+            // Find the selected facility object from the facilities prop to get its ID
             const selectedFacility = facilities.find(facility => facility.name === formData.facilityName);
 
             if (!selectedFacility) {
                 alert('Could not find the selected facility. Please try again.');
                 return;
             }
-            // --- End of Fix ---
 
+            // Save the new user's details to Firestore
             await setDoc(doc(db, "users", newUser.uid), {
                 id: newUser.uid,
                 name: `${formData.facilityName} Admin`,
                 email: formData.email,
                 facilityName: formData.facilityName,
-                // --- Add facilityId to the user document ---
+                // Add facilityId to the user document
                 facilityId: selectedFacility.id, 
                 role: 'Facility Admin',
                 assignedPrograms: [],
@@ -66,8 +66,9 @@ const AddFacilityAdminModal = ({ onClose, facilities }) => {
         }
     };
     
+    // Group facilities by type for the dropdown
     const facilitiesByType = facilities.reduce((acc, facility) => {
-        if (facility.name === 'Provincial Health Office') return acc;
+        if (facility.name === 'Provincial Health Office') return acc; // Exclude PHO
         const type = facility.type || 'Uncategorized';
         if (!acc[type]) {
             acc[type] = [];
@@ -75,6 +76,14 @@ const AddFacilityAdminModal = ({ onClose, facilities }) => {
         acc[type].push(facility);
         return acc;
     }, {});
+
+    // Sort facilities within each type alphabetically by name
+    for (const type in facilitiesByType) {
+        facilitiesByType[type].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    // Get the keys (types) and sort them alphabetically
+    const sortedTypes = Object.keys(facilitiesByType).sort((a, b) => a.localeCompare(b));
 
 
     return (
@@ -85,9 +94,9 @@ const AddFacilityAdminModal = ({ onClose, facilities }) => {
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Facility</label>
-                        <select name="facilityName" value={formData.facilityName} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required>
+                        <select name="facilityName" value={formData.facilityName} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required>
                             <option value="">Select a Facility</option>
-                            {Object.keys(facilitiesByType).map(type => (
+                            {sortedTypes.map(type => (
                                 <optgroup label={type} key={type}>
                                     {facilitiesByType[type].map(facility => (
                                         <option key={facility.id} value={facility.name}>{facility.name}</option>
@@ -98,19 +107,19 @@ const AddFacilityAdminModal = ({ onClose, facilities }) => {
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Admin Email</label>
-                        <input type="email" name="email" value={formData.email} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        <input type="email" name="email" value={formData.email} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required />
                     </div>
                      <div>
                         <label className="block text-sm font-medium text-gray-700">Password</label>
-                        <input type="password" name="password" value={formData.password} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        <input type="password" name="password" value={formData.password} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required />
                     </div>
                      <div>
                         <label className="block text-sm font-medium text-gray-700">Confirm Password</label>
-                        <input type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm" required />
+                        <input type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} className="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required />
                     </div>
                     <div className="mt-6 flex justify-end space-x-3">
                         <button type="button" onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
-                        <button type="submit" className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary">Create Facility Admin</button>
+                        <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Create Facility Admin</button>
                     </div>
                 </form>
             </div>
