@@ -1,70 +1,158 @@
-# Getting Started with Create React App
+Abra PHO Data Management System (APDMS)
+1. Overview
+The Abra Provincial Health Office (PHO) Data Management System is a web-based portal designed to streamline the collection, management, and analysis of annual program data from various health facilities. It provides a centralized platform for facility users to submit data, PHO administrators to review and manage submissions, and super administrators to oversee the entire system.
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+The application features role-based access control to ensure data security and integrity, with different dashboards and permissions tailored to each user type.
 
-## Available Scripts
+2. Key Features
+Role-Based Dashboards: Customized views for Super Admins, PHO Admins, Facility Admins, and Facility Users.
 
-In the project directory, you can run:
+User Management: Admins can create, update, and manage user accounts and their associated roles.
 
-### `npm start`
+Facility Management: Admins can add and manage health facilities within the system.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+Secure Data Submission: A structured process for facilities to upload their annual program data and supporting documents.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+Data Visualization: Interactive charts and graphs for analyzing submitted data.
 
-### `npm test`
+Reporting: Generate reports based on the collected data.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+Audit Logs: Track important system activities for accountability.
 
-### `npm run build`
+Real-time Notifications: In-app notifications for important events and updates.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+3. Technology Stack
+Frontend: React, React Router, Tailwind CSS
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+Backend & Database: Firebase (Authentication, Firestore, Storage, Hosting)
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Charting: Chart.js
 
-### `npm run eject`
+State Management: React Context API
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+4. Prerequisites
+Before you begin, ensure you have the following installed:
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Node.js (LTS version recommended)
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+npm or yarn package manager
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+Firebase CLI (npm install -g firebase-tools)
 
-## Learn More
+You will also need a Firebase project. If you don't have one, create one at the Firebase Console.
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+5. Installation and Local Setup
+Step 1: Clone the Repository
+git clone <your-repository-url>
+cd apdms-portal
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+Step 2: Install Dependencies
+Install the required npm packages for the project root and the functions directory.
 
-### Code Splitting
+# Install root dependencies
+npm install
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+# Navigate to functions directory and install its dependencies
+cd functions
+npm install
+cd ..
 
-### Analyzing the Bundle Size
+Step 3: Configure Firebase
+In the Firebase Console, go to your project's settings.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+Under "Your apps", create a new Web app.
 
-### Making a Progressive Web App
+Copy the firebaseConfig object.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+Step 4: Set Up Environment Variables
+Create a file named .env.local in the root of the project. Paste your firebaseConfig keys into this file, prefixing each key with REACT_APP_.
 
-### Advanced Configuration
+File: .env.local
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+REACT_APP_FIREBASE_API_KEY="your-api-key"
+REACT_APP_FIREBASE_AUTH_DOMAIN="your-auth-domain"
+REACT_APP_FIREBASE_PROJECT_ID="your-project-id"
+REACT_APP_FIREBASE_STORAGE_BUCKET="your-storage-bucket"
+REACT_APP_FIREBASE_MESSAGING_SENDER_ID="your-messaging-sender-id"
+REACT_APP_FIREBASE_APP_ID="your-app-id"
 
-### Deployment
+Important: You must update src/firebase/config.js to read these environment variables instead of using hardcoded values.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+Step 5: Run the Development Server
+npm start
 
-### `npm run build` fails to minify
+The application should now be running locally at http://localhost:3000.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+6. CRITICAL Security Configuration
+Your application will not function correctly and will be insecure without these changes.
+
+1. Firestore Rules (firestore.rules)
+The current rules (allow read, write: if false;) block all database access. You must replace them with rules that grant access based on user roles.
+
+Example (This is a basic template, customize it for your needs):
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow admins to read/write anything
+    match /{document=**} {
+      allow read, write: if request.auth.token.role == 'admin';
+    }
+
+    // Allow facility users to only read/write their own data
+    match /facilities/{facilityId}/{documents=**} {
+      allow read, write: if request.auth.uid != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.facilityId == facilityId;
+    }
+  }
+}
+
+2. Storage Rules (storage.rules)
+The current rules allow any authenticated user to access any file. Tighten them to restrict access based on facility or user.
+
+Example:
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Only allow users to upload to a path corresponding to their facility ID
+    match /submissions/{facilityId}/{fileName} {
+      allow write: if request.auth != null && resource.size < 10 * 1024 * 1024
+                   && request.auth.token.facilityId == facilityId;
+      allow read: if request.auth != null && request.auth.token.facilityId == facilityId;
+    }
+  }
+}
+
+Note: The examples above assume you are using Firebase Custom Claims to set user roles (role, facilityId). You will need to implement a Firebase Function to set these claims when a user is created or updated.
+
+7. Deployment to Firebase Hosting
+Step 1: Correct the Hosting Configuration
+In firebase.json, change the public directory from "public" to "build". This is essential for deploying a Create React App project.
+
+File: firebase.json
+
+{
+  "hosting": {
+    "public": "build", // <-- CHANGE THIS
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+  // ... other configs
+}
+
+Step 2: Build the Application
+npm run build
+
+Step 3: Deploy
+firebase deploy
+
+This command will deploy your hosting configuration, Firestore rules, Storage rules, and any Firebase Functions.
