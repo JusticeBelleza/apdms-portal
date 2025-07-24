@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { Check, X, CheckCircle, Clock, AlertTriangle, MinusCircle, File as FileIcon, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, X, CheckCircle, Clock, FileText, ChevronDown, ChevronRight, ChevronLeft, File as FileIcon, ClipboardList, MinusCircle } from "lucide-react";
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import ConfirmationModal from '../modals/ConfirmationModal';
 import RejectionModal from '../modals/RejectionModal';
 import toast from 'react-hot-toast';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { getMorbidityWeek } from '../../utils/helpers';
 
 // --- Helper Functions for Date Calculation (no changes) ---
 const getMorbidityWeekRange = () => {
@@ -26,11 +27,20 @@ const getMonthRange = () => {
     return { start: startOfMonth, end: endOfMonth };
 };
 
-const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }) => {
+const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [], facilities = [] }) => {
     const [activeProgramId, setActiveProgramId] = useState(null);
     const [modalState, setModalState] = useState({ type: null, data: null });
     const [expandedBatch, setExpandedBatch] = useState(null);
     const [selectedDocuments, setSelectedDocuments] = useState([]);
+    
+    // State for Recent Activity Feed
+    const [activityProgram, setActivityProgram] = useState('all');
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 5;
+
+    // State for new Facility Status widget
+    const [complianceFilter, setComplianceFilter] = useState('all');
+
 
     const functions = getFunctions();
     const processSubmission = httpsCallable(functions, 'processSubmission');
@@ -131,49 +141,149 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
         return { stats: calculatedStats, chartData: calculatedChartData };
     }, [submissions, activeProgram, activeProgramId]);
 
-
-    const facilityCompliance = useMemo(() => {
-        if (!activeProgramId || !users.length || !activeProgram) return [];
-
-        let startDate, endDate;
-        const isPidsr = activeProgram.name.toUpperCase().includes("PIDSR");
-        if (isPidsr) {
-            const range = getMorbidityWeekRange();
-            startDate = range.start;
-            endDate = range.end;
-        } else if (activeProgram.name.toUpperCase().includes("RABIES")) {
-            const range = getMonthRange();
-            startDate = range.start;
-            endDate = range.end;
-        } else {
-            const range = getMonthRange();
-            startDate = range.start;
-            endDate = range.end;
-        }
-
-        const relevantFacilities = [...new Set(
-            users
-                .filter(u => u.assignedPrograms?.includes(activeProgramId) && u.facilityName !== 'Provincial Health Office')
-                .map(u => u.facilityName)
-        )];
-
-        return relevantFacilities.map(facilityName => {
-            const facilitySubmissions = submissions.filter(s => 
-                s.facilityName === facilityName && 
-                (s.programId === activeProgramId || (isPidsr && s.programId === 'PIDSR')) &&
-                s.timestamp?.toDate() >= startDate &&
-                s.timestamp?.toDate() <= endDate
-            );
-
-            if (facilitySubmissions.length > 0) {
-                const latestSubmission = facilitySubmissions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate())[0];
-                return { name: facilityName, status: latestSubmission.status };
-            } else {
-                return { name: facilityName, status: 'Not Yet Submitted' };
+    // Recent Activity Feed Logic
+    const activityFeedData = useMemo(() => {
+        const sortedSubmissions = submissions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate());
+        
+        const grouped = sortedSubmissions.reduce((acc, sub) => {
+            const key = sub.batchId || sub.id;
+            if (!acc[key]) {
+                acc[key] = {
+                    id: key,
+                    isBatch: !!sub.batchId,
+                    programName: sub.programName,
+                    programId: sub.programId,
+                    userName: sub.userName,
+                    facilityName: sub.facilityName,
+                    timestamp: sub.timestamp,
+                    count: 0
+                };
             }
+            acc[key].count++;
+            return acc;
+        }, {});
+
+        const selectedProgramInfo = programs.find(p => p.id === activityProgram);
+        const isPidsrFilter = selectedProgramInfo?.name.toUpperCase().includes('PIDSR');
+
+        const filtered = Object.values(grouped).filter(item => {
+            if (activityProgram === 'all') return true;
+            if (isPidsrFilter) return item.programId === 'PIDSR' || item.programId === activityProgram;
+            return item.programId === activityProgram;
         });
 
-    }, [activeProgramId, users, submissions, activeProgram]);
+        const totalPages = Math.ceil(filtered.length / itemsPerPage);
+        const paginatedItems = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+        return { items: paginatedItems, totalPages, totalItems: filtered.length };
+
+    }, [submissions, activityProgram, currentPage, programs]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [activityProgram]);
+
+    // --- REWRITTEN & SIMPLIFIED: Logic for the Facility Submission Status widget ---
+    const { facilityComplianceData, compliancePeriod } = useMemo(() => {
+        // First, build a definitive list of all facilities from the available data.
+        const allFacilitiesMap = new Map();
+        if (facilities && facilities.length > 0) {
+            facilities.forEach(f => allFacilitiesMap.set(f.id, { id: f.id, name: f.name }));
+        } else {
+            // Fallback if facilities prop is empty
+            users.forEach(u => {
+                if (u.facilityId && u.facilityName && !allFacilitiesMap.has(u.facilityId)) {
+                    allFacilitiesMap.set(u.facilityId, { id: u.facilityId, name: u.facilityName });
+                }
+            });
+        }
+        const allFacilities = Array.from(allFacilitiesMap.values());
+
+        // Now, check for exit conditions.
+        if (!activeProgram || allFacilities.length === 0) {
+            return { facilityComplianceData: [], compliancePeriod: '' };
+        }
+    
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        let periodType, currentPeriod, periodString;
+    
+        const isPidsrProgram = activeProgram.name?.toUpperCase().includes("PIDSR");
+        const isRabiesProgram = activeProgram.name?.toLowerCase().includes("rabies");
+    
+        if (isPidsrProgram || !isRabiesProgram) { // Default to weekly
+            periodType = 'weekly';
+            currentPeriod = getMorbidityWeek(now);
+            periodString = `for Morbidity Week ${currentPeriod}`;
+        } else { // Monthly for Rabies
+            periodType = 'monthly';
+            currentPeriod = now.getMonth() + 1;
+            periodString = `for ${now.toLocaleString('default', { month: 'long' })}`;
+        }
+    
+        const data = allFacilities.map(facility => {
+            const isRequired = users.some(u => {
+                if (u.facilityId !== facility.id || !u.assignedPrograms) return false;
+                
+                if (isPidsrProgram) {
+                    const pidsrProgramIds = programs.filter(p => p.name?.toUpperCase().includes("PIDSR")).map(p => p.id);
+                    return u.assignedPrograms.some(ap => pidsrProgramIds.includes(ap));
+                }
+                
+                return u.assignedPrograms.includes(activeProgram.id);
+            });
+    
+            if (!isRequired) {
+                return { id: facility.id, name: facility.name, status: 'not-required' };
+            }
+    
+            const relevantSubmissions = submissions.filter(sub => {
+                const isCorrectFacility = sub.facilityId === facility.id;
+                const isCorrectProgram = isPidsrProgram
+                    ? (sub.programId === activeProgram.id || sub.programId === 'PIDSR')
+                    : sub.programId === activeProgram.id;
+    
+                if (!isCorrectFacility || !isCorrectProgram) return false;
+    
+                if (periodType === 'monthly') {
+                    return sub.submissionMonth === currentPeriod && sub.submissionYear === currentYear;
+                } else { // weekly
+                    return sub.morbidityWeek === currentPeriod && sub.submissionYear === currentYear;
+                }
+            });
+    
+            if (relevantSubmissions.length > 0) {
+                if (relevantSubmissions.some(s => s.status === 'pending')) {
+                     return { id: facility.id, name: facility.name, status: 'pending' };
+                }
+                if (relevantSubmissions.some(s => s.status === 'approved')) {
+                     return { id: facility.id, name: facility.name, status: 'submitted' };
+                }
+                return { id: facility.id, name: facility.name, status: 'not-submitted' };
+            }
+    
+            return { id: facility.id, name: facility.name, status: 'not-submitted' };
+        });
+    
+        data.sort((a, b) => {
+            const statusOrder = { 'not-submitted': 0, 'pending': 1, 'submitted': 2, 'not-required': 3 };
+            if (statusOrder[a.status] !== statusOrder[b.status]) {
+                return statusOrder[a.status] - statusOrder[b.status];
+            }
+            return a.name.localeCompare(b.name);
+        });
+    
+        return { facilityComplianceData: data, compliancePeriod: periodString };
+    
+    }, [activeProgram, facilities, users, programs, submissions]);
+
+    const filteredComplianceData = useMemo(() => {
+        if (complianceFilter === 'all') {
+            return facilityComplianceData;
+        }
+        return facilityComplianceData.filter(f => f.status === complianceFilter);
+    }, [facilityComplianceData, complianceFilter]);
+
 
     const handleProcessSelected = (action, rejectionReason = '') => {
         const promise = processSubmission({
@@ -202,21 +312,6 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
         'Approved': '#10B981',
         'Pending': '#F59E0B',
         'Rejected': '#EF4444',
-    };
-
-    const ComplianceStatusBadge = ({ status }) => {
-        const baseClasses = "px-2 py-1 text-xs font-semibold rounded-full inline-flex items-center";
-        switch (status) {
-            case 'approved':
-                return <span className={`${baseClasses} bg-green-100 text-green-800`}><CheckCircle className="w-3 h-3 mr-1"/>Approved</span>;
-            case 'pending':
-                return <span className={`${baseClasses} bg-yellow-100 text-yellow-800`}><Clock className="w-3 h-3 mr-1"/>Pending Approval</span>;
-            case 'rejected':
-                return <span className={`${baseClasses} bg-red-100 text-red-800`}><AlertTriangle className="w-3 h-3 mr-1"/>Rejected</span>;
-            case 'Not Yet Submitted':
-            default:
-                return <span className={`${baseClasses} bg-gray-100 text-gray-800`}><MinusCircle className="w-3 h-3 mr-1"/>Not Yet Submitted</span>;
-        }
     };
 
     return (
@@ -384,36 +479,104 @@ const PhoAdminDashboard = ({ user, programs = [], submissions = [], users = [] }
                             <p className="text-gray-500">No pending submissions for the selected program.</p>
                         )}
                     </div>
+                </div>
+            </div>
 
-                    <div className="pt-6 mt-6 border-t">
-                        <h2 className="text-xl font-semibold mb-4">Facility Compliance</h2>
-                        {facilityCompliance.length > 0 ? (
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-gray-200">
-                                    <thead className="bg-gray-50">
-                                        <tr>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Facility Name</th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status for Period</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
-                                        {facilityCompliance.map((facility) => (
-                                            <tr key={facility.name}>
-                                                <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{facility.name}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    <ComplianceStatusBadge status={facility.status} />
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* --- Recent Activity Feed --- */}
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold mb-4 text-gray-700">Recent Activity</h2>
+                    <div className="border-b border-gray-200 mb-4">
+                        <nav className="-mb-px flex space-x-6 overflow-x-auto scrollbar-hide" aria-label="Tabs">
+                            <button onClick={() => setActivityProgram('all')} className={`py-2 px-1 text-sm font-medium whitespace-nowrap ${activityProgram === 'all' ? 'border-b-2 border-primary text-primary' : 'text-gray-500 hover:text-gray-700'}`}>All Programs</button>
+                            {programs.map(p => (
+                                <button key={p.id} onClick={() => setActivityProgram(p.id)} className={`py-2 px-1 text-sm font-medium whitespace-nowrap ${activityProgram === p.id ? 'border-b-2 border-primary text-primary' : 'text-gray-500 hover:text-gray-700'}`}>{p.name}</button>
+                            ))}
+                        </nav>
+                    </div>
+                    <div className="space-y-4 min-h-[280px]">
+                        {activityFeedData.items.length > 0 ? activityFeedData.items.map(sub => (
+                            <div key={sub.id} className="flex items-center text-sm">
+                                <div className="p-2 bg-gray-100 rounded-full mr-3">
+                                    <FileText className="w-4 h-4 text-gray-500" />
+                                </div>
+                                <div>
+                                    <p className="text-gray-800">
+                                        <span className="font-semibold">{sub.userName}</span> from <span className="font-semibold">{sub.facilityName}</span> submitted a report for <span className="font-semibold">{sub.programName}</span>.
+                                    </p>
+                                    <p className="text-xs text-gray-400">{sub.timestamp.toDate().toLocaleString()}</p>
+                                </div>
                             </div>
-                        ) : (
-                            <p className="text-gray-500">No facilities are assigned to this program.</p>
+                        )) : (
+                            <p className="text-gray-500 pt-10 text-center">No recent activity for this program.</p>
+                        )}
+                    </div>
+                    {activityFeedData.totalPages > 1 && (
+                        <div className="flex justify-between items-center mt-4 text-sm">
+                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="flex items-center px-3 py-1 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50">
+                                <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                            </button>
+                            <span>Page {currentPage} of {activityFeedData.totalPages}</span>
+                            <button onClick={() => setCurrentPage(p => Math.min(activityFeedData.totalPages, p + 1))} disabled={currentPage === activityFeedData.totalPages} className="flex items-center px-3 py-1 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50">
+                                Next <ChevronRight className="w-4 h-4 ml-1" />
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* --- UPDATED: Facility Submission Status Widget --- */}
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold mb-1 text-gray-700 flex items-center">
+                        <ClipboardList className="w-6 h-6 text-gray-500 mr-2" />
+                        Facility Submission Status
+                    </h2>
+                    <p className="text-sm text-gray-500 mb-4">
+                        Status for {activeProgram?.name} {compliancePeriod}
+                    </p>
+
+                    <div className="flex space-x-2 mb-4">
+                        <button onClick={() => setComplianceFilter('all')} className={`px-3 py-1 text-sm rounded-full ${complianceFilter === 'all' ? 'bg-primary text-white' : 'bg-gray-200 text-gray-700'}`}>All ({facilityComplianceData.length})</button>
+                        <button onClick={() => setComplianceFilter('submitted')} className={`px-3 py-1 text-sm rounded-full ${complianceFilter === 'submitted' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-700'}`}>Submitted ({facilityComplianceData.filter(f=>f.status === 'submitted').length})</button>
+                        <button onClick={() => setComplianceFilter('pending')} className={`px-3 py-1 text-sm rounded-full ${complianceFilter === 'pending' ? 'bg-yellow-500 text-white' : 'bg-gray-200 text-gray-700'}`}>Pending ({facilityComplianceData.filter(f=>f.status === 'pending').length})</button>
+                        <button onClick={() => setComplianceFilter('not-submitted')} className={`px-3 py-1 text-sm rounded-full ${complianceFilter === 'not-submitted' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-700'}`}>Not Submitted ({facilityComplianceData.filter(f=>f.status === 'not-submitted').length})</button>
+                    </div>
+
+                    <div className="space-y-3 max-h-72 overflow-y-auto scrollbar-thin">
+                        {filteredComplianceData.length > 0 ? filteredComplianceData.map((facility) => (
+                            <div key={facility.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-md">
+                                <span className="font-medium text-gray-800">{facility.name}</span>
+                                {facility.status === 'submitted' ? (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                        <CheckCircle className="w-4 h-4 mr-1.5" />
+                                        Submitted
+                                    </span>
+                                ) : facility.status === 'pending' ? (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                        <Clock className="w-4 h-4 mr-1.5" />
+                                        Pending Approval
+                                    </span>
+                                ) : facility.status === 'not-submitted' ? (
+                                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                        <X className="w-4 h-4 mr-1.5" />
+                                        Not Yet Submitted
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                        <MinusCircle className="w-4 h-4 mr-1.5" />
+                                        Not Required
+                                    </span>
+                                )}
+                            </div>
+                        )) : (
+                            <div className="text-center py-10">
+                                <p className="text-gray-500">No facilities to display.</p>
+                                <p className="text-xs text-gray-400 mt-2">This may be because no facilities are assigned to the '{activeProgram?.name}' program.</p>
+                            </div>
                         )}
                     </div>
                 </div>
             </div>
+
 
             {(modalState.type === 'batch_approve') && (
                 <ConfirmationModal

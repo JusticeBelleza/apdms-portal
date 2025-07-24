@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { Users, Building, FileText, Clock, UserPlus, AlertTriangle, TrendingUp, TrendingDown, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Users, Building, FileText, Clock, UserPlus, AlertTriangle, TrendingUp, TrendingDown, ShieldCheck, ShieldAlert, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMorbidityWeek } from '../../utils/helpers';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
@@ -9,26 +9,73 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
     const systemStats = useMemo(() => {
         const activeUsers = users.filter(u => u.isActive);
         const activePrograms = programs.filter(p => p.active !== false);
-        const pendingSubmissions = submissions.filter(s => s.status === 'pending');
+        
+        const pendingGroups = submissions.filter(s => s.status === 'pending').reduce((acc, sub) => {
+            const key = sub.batchId || sub.id;
+            if (!acc[key]) acc[key] = 0;
+            acc[key]++;
+            return acc;
+        }, {});
+
         const deletionRequests = submissions.filter(s => s.deletionRequest);
 
         return {
             totalUsers: activeUsers.length,
             totalFacilities: facilities.length,
             totalPrograms: activePrograms.length,
-            totalPending: pendingSubmissions.length,
+            totalPending: Object.keys(pendingGroups).length,
             deletionRequestsCount: deletionRequests.length,
         };
     }, [users, facilities, programs, submissions]);
 
-    // --- Recent Activity Feed ---
-    const recentActivity = useMemo(() => {
-        return submissions
-            .sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate())
-            .slice(0, 5);
-    }, [submissions]);
+    // --- 2. Recent Activity Feed (with Pagination and Filtering) ---
+    const [activityProgram, setActivityProgram] = useState('all');
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 5;
 
-    // --- Facility Compliance Leaderboard ---
+    const activityFeedData = useMemo(() => {
+        const sortedSubmissions = submissions.sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate());
+        
+        const grouped = sortedSubmissions.reduce((acc, sub) => {
+            const key = sub.batchId || sub.id;
+            if (!acc[key]) {
+                acc[key] = {
+                    id: key,
+                    isBatch: !!sub.batchId,
+                    programName: sub.programName,
+                    programId: sub.programId,
+                    userName: sub.userName,
+                    facilityName: sub.facilityName,
+                    timestamp: sub.timestamp,
+                    count: 0
+                };
+            }
+            acc[key].count++;
+            return acc;
+        }, {});
+
+        const selectedProgramInfo = programs.find(p => p.id === activityProgram);
+        const isPidsrFilter = selectedProgramInfo?.name.toUpperCase().includes('PIDSR');
+
+        const filtered = Object.values(grouped).filter(item => {
+            if (activityProgram === 'all') return true;
+            if (isPidsrFilter) return item.programId === 'PIDSR' || item.programId === activityProgram;
+            return item.programId === activityProgram;
+        });
+
+        const totalPages = Math.ceil(filtered.length / itemsPerPage);
+        const paginatedItems = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+        return { items: paginatedItems, totalPages, totalItems: filtered.length };
+
+    }, [submissions, activityProgram, currentPage, programs]);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [activityProgram]);
+
+
+    // --- 3. Facility Compliance Leaderboard (with corrected logic) ---
     const complianceLeaderboard = useMemo(() => {
         const now = new Date();
         const currentMorbidityWeek = getMorbidityWeek(now);
@@ -38,12 +85,12 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
         const facilityScores = facilities.map(facility => {
             const facilityUsers = users.filter(u => u.facilityId === facility.id);
             if (facilityUsers.length === 0) {
-                return { name: facility.name, rate: -1 }; // Exclude facilities with no users
+                return { name: facility.name, rate: -1 };
             }
 
             const assignedProgramIds = [...new Set(facilityUsers.flatMap(u => u.assignedPrograms || []))];
             if (assignedProgramIds.length === 0) {
-                return { name: facility.name, rate: -1 }; // Exclude facilities with no assigned programs
+                return { name: facility.name, rate: -1 };
             }
 
             let requiredSubmissions = 0;
@@ -55,11 +102,12 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
 
                 requiredSubmissions++;
                 
+                const isPidsr = program.name?.toUpperCase().includes("PIDSR");
                 const periodType = program.name?.toLowerCase().includes("rabies") ? "monthly" : "weekly";
                 
                 const hasSubmitted = submissions.some(sub => {
                     const isCorrectFacility = sub.facilityId === facility.id;
-                    const isCorrectProgram = sub.programId === programId;
+                    const isCorrectProgram = sub.programId === programId || (isPidsr && sub.programId === 'PIDSR');
                     if (!isCorrectFacility || !isCorrectProgram) return false;
 
                     if (periodType === 'monthly') {
@@ -80,7 +128,7 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
 
             const rate = (madeSubmissions / requiredSubmissions) * 100;
             return { name: facility.name, rate };
-        }).filter(f => f.rate !== -1); // Filter out facilities with no users/programs
+        }).filter(f => f.rate !== -1);
 
         facilityScores.sort((a, b) => b.rate - a.rate);
 
@@ -90,7 +138,7 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
         };
     }, [facilities, users, programs, submissions]);
 
-    // --- NEW: System Health State & Fetch ---
+    // --- 4. System Health State & Fetch ---
     const [systemHealth, setSystemHealth] = useState({ errorCount: 0, loading: true });
 
     useEffect(() => {
@@ -165,7 +213,6 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
                             </button>
                         </div>
                     </div>
-                    {/* --- NEW: System Health Widget --- */}
                     <div className="bg-white p-6 rounded-lg shadow-md">
                         <h2 className="text-xl font-semibold mb-4 text-gray-700">System Health</h2>
                         <div className="flex items-center">
@@ -195,26 +242,44 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
                     </div>
                 </div>
 
-                {/* Recent System Activity */}
+                {/* --- UPDATED: Recent System Activity with Tabs and Pagination --- */}
                 <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md">
-                    <h2 className="text-xl font-semibold mb-4 text-gray-700">Recent Activity</h2>
-                    <div className="space-y-4">
-                        {recentActivity.length > 0 ? recentActivity.map(sub => (
+                    <div className="border-b border-gray-200 mb-4">
+                        <nav className="-mb-px flex space-x-6 overflow-x-auto scrollbar-hide" aria-label="Tabs">
+                            <button onClick={() => setActivityProgram('all')} className={`py-2 px-1 text-sm font-medium whitespace-nowrap ${activityProgram === 'all' ? 'border-b-2 border-primary text-primary' : 'text-gray-500 hover:text-gray-700'}`}>All Programs</button>
+                            {programs.map(p => (
+                                <button key={p.id} onClick={() => setActivityProgram(p.id)} className={`py-2 px-1 text-sm font-medium whitespace-nowrap ${activityProgram === p.id ? 'border-b-2 border-primary text-primary' : 'text-gray-500 hover:text-gray-700'}`}>{p.name}</button>
+                            ))}
+                        </nav>
+                    </div>
+                    <div className="space-y-4 min-h-[280px]">
+                        {activityFeedData.items.length > 0 ? activityFeedData.items.map(sub => (
                              <div key={sub.id} className="flex items-center text-sm">
-                                <div className="p-2 bg-gray-100 rounded-full mr-3">
-                                    <FileText className="w-4 h-4 text-gray-500" />
-                                </div>
-                                <div>
-                                    <p className="text-gray-800">
-                                        <span className="font-semibold">{sub.userName}</span> from <span className="font-semibold">{sub.facilityName}</span> submitted a report for <span className="font-semibold">{sub.programName}</span>.
-                                    </p>
-                                    <p className="text-xs text-gray-400">{sub.timestamp.toDate().toLocaleString()}</p>
-                                </div>
-                            </div>
+                                 <div className="p-2 bg-gray-100 rounded-full mr-3">
+                                     <FileText className="w-4 h-4 text-gray-500" />
+                                 </div>
+                                 <div>
+                                     <p className="text-gray-800">
+                                         <span className="font-semibold">{sub.userName}</span> from <span className="font-semibold">{sub.facilityName}</span> submitted a report for <span className="font-semibold">{sub.programName}</span>.
+                                     </p>
+                                     <p className="text-xs text-gray-400">{sub.timestamp.toDate().toLocaleString()}</p>
+                                 </div>
+                             </div>
                         )) : (
-                            <p className="text-gray-500">No recent system activity.</p>
+                            <p className="text-gray-500 pt-10 text-center">No recent activity for this program.</p>
                         )}
                     </div>
+                    {activityFeedData.totalPages > 1 && (
+                        <div className="flex justify-between items-center mt-4 text-sm">
+                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="flex items-center px-3 py-1 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50">
+                                <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                            </button>
+                            <span>Page {currentPage} of {activityFeedData.totalPages}</span>
+                            <button onClick={() => setCurrentPage(p => Math.min(activityFeedData.totalPages, p + 1))} disabled={currentPage === activityFeedData.totalPages} className="flex items-center px-3 py-1 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50">
+                                Next <ChevronRight className="w-4 h-4 ml-1" />
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
             
@@ -226,10 +291,12 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
                         Top Compliant Facilities
                     </h2>
                     <div className="space-y-3">
-                        {complianceLeaderboard.top5.map(facility => (
+                        {complianceLeaderboard.top5.map((facility, index) => (
                             <div key={facility.name} className="flex justify-between items-center bg-gray-50 p-3 rounded-md">
-                                <span className="font-medium text-gray-800">{facility.name}</span>
-                                <span className="font-bold text-green-600">{facility.rate.toFixed(0)}%</span>
+                                <div className="flex items-center">
+                                    <span className="text-sm font-bold text-gray-600 w-6">{index + 1}.</span>
+                                    <span className="font-medium text-gray-800">{facility.name}</span>
+                                </div>
                             </div>
                         ))}
                     </div>
@@ -237,14 +304,16 @@ const AdminDashboard = ({ facilities = [], programs = [], users = [], submission
                 {/* Bottom 5 Compliant */}
                 <div className="bg-white p-6 rounded-lg shadow-md">
                      <h2 className="text-xl font-semibold mb-4 text-gray-700 flex items-center">
-                        <TrendingDown className="w-6 h-6 text-red-500 mr-2" />
-                        Least Compliant Facilities
-                    </h2>
+                         <TrendingDown className="w-6 h-6 text-red-500 mr-2" />
+                         Least Compliant Facilities
+                     </h2>
                     <div className="space-y-3">
-                        {complianceLeaderboard.bottom5.map(facility => (
+                        {complianceLeaderboard.bottom5.map((facility, index) => (
                             <div key={facility.name} className="flex justify-between items-center bg-gray-50 p-3 rounded-md">
-                                <span className="font-medium text-gray-800">{facility.name}</span>
-                                <span className="font-bold text-red-600">{facility.rate.toFixed(0)}%</span>
+                               <div className="flex items-center">
+                                    <span className="text-sm font-bold text-gray-600 w-6">{index + 1}.</span>
+                                    <span className="font-medium text-gray-800">{facility.name}</span>
+                                </div>
                             </div>
                         ))}
                     </div>

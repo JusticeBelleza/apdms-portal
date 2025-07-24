@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
-import { Users, FileText, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, CheckSquare } from 'lucide-react';
+import { getMorbidityWeek } from '../../utils/helpers';
 
-const FacilityAdminDashboard = ({ user, users, submissions, onlineStatuses, onNavigate }) => {
+const FacilityAdminDashboard = ({ user, users, submissions, onlineStatuses, onNavigate, programs }) => {
 
     // Memoized calculation to find users belonging to the admin's facility.
     const facilityUsers = useMemo(() => {
@@ -11,35 +12,96 @@ const FacilityAdminDashboard = ({ user, users, submissions, onlineStatuses, onNa
         return users.filter(u => u.facilityId === user.facilityId && u.id !== user.id);
     }, [user, users]);
 
-    // Memoized calculation for recent submissions from the facility.
-    const recentSubmissions = useMemo(() => {
+    // --- NEW: Memoized calculation to get all programs assigned to anyone in the facility ---
+    const facilityPrograms = useMemo(() => {
+        if (!facilityUsers.length || !programs) return [];
+        const assignedProgramIds = new Set(facilityUsers.flatMap(u => u.assignedPrograms || []));
+        return programs.filter(p => assignedProgramIds.has(p.id));
+    }, [facilityUsers, programs]);
+
+    // --- UPDATED: Groups weekly submissions by program/batch ---
+    const weeklySubmissions = useMemo(() => {
         if (!user || !user.facilityId || !submissions) {
             return [];
         }
-        return submissions
-            .filter(s => s.facilityId === user.facilityId)
-            .sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate())
-            .slice(0, 5); // Get the 5 most recent submissions
-    }, [user, submissions]);
-
-    // Memoized calculation for compliance stats for the current month.
-    const complianceStats = useMemo(() => {
-        if (!user || !user.facilityId || !submissions) {
-            return { approved: 0, rejected: 0, pending: 0 };
-        }
         const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() - now.getDay());
+        startOfWeek.setHours(0, 0, 0, 0);
+        
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6);
+        endOfWeek.setHours(23, 59, 59, 999);
 
-        const facilitySubmissionsThisMonth = submissions.filter(s => 
-            s.facilityId === user.facilityId && s.timestamp.toDate() >= startOfMonth
-        );
+        const submissionsThisWeek = submissions
+            .filter(s => {
+                const subDate = s.timestamp.toDate();
+                return s.facilityId === user.facilityId && subDate >= startOfWeek && subDate <= endOfWeek;
+            });
 
-        return {
-            approved: facilitySubmissionsThisMonth.filter(s => s.status === 'approved').length,
-            rejected: facilitySubmissionsThisMonth.filter(s => s.status === 'rejected').length,
-            pending: facilitySubmissionsThisMonth.filter(s => s.status === 'pending').length,
-        };
+        // Group submissions by batchId or, if none, by individual document id
+        const grouped = submissionsThisWeek.reduce((acc, sub) => {
+            const key = sub.batchId || sub.id;
+            if (!acc[key]) {
+                acc[key] = {
+                    id: key,
+                    programName: sub.programName,
+                    userName: sub.userName,
+                    timestamp: sub.timestamp,
+                    status: sub.status, // The status of all items in a batch will be the same initially
+                };
+            }
+            return acc;
+        }, {});
+
+        // Convert the grouped object back to an array and sort by date
+        return Object.values(grouped)
+            .sort((a, b) => b.timestamp.toDate() - a.timestamp.toDate());
     }, [user, submissions]);
+
+    // --- UPDATED: This logic now calculates compliance per file for the current period ---
+    const complianceStats = useMemo(() => {
+        if (!user || !programs || !submissions || !facilityUsers.length) {
+            return { approved: 0, rejected: 0, pending: 0, notSubmitted: 0, total: 0 };
+        }
+
+        const assignedProgramIds = new Set(facilityUsers.flatMap(u => u.assignedPrograms || []));
+        const assignedPrograms = programs.filter(p => assignedProgramIds.has(p.id));
+
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1;
+        const currentWeek = getMorbidityWeek(now);
+
+        let submissionsForCurrentPeriod = [];
+        let programsWithSubmissions = new Set();
+
+        assignedPrograms.forEach(program => {
+            const isPidsr = program.name?.toUpperCase().includes('PIDSR');
+            const period = isPidsr 
+                ? { type: 'weekly', week: currentWeek, year: currentYear }
+                : { type: 'monthly', month: currentMonth, year: currentYear };
+
+            const programSubmissions = submissions.filter(s =>
+                s.facilityId === user.facilityId &&
+                (s.programId === program.id || (isPidsr && s.programId === 'PIDSR')) &&
+                s.submissionYear === period.year &&
+                (period.type === 'monthly' ? s.submissionMonth === period.month : s.morbidityWeek === period.week)
+            );
+
+            if (programSubmissions.length > 0) {
+                submissionsForCurrentPeriod.push(...programSubmissions);
+                programsWithSubmissions.add(program.id);
+            }
+        });
+        
+        const approved = submissionsForCurrentPeriod.filter(s => s.status === 'approved').length;
+        const rejected = submissionsForCurrentPeriod.filter(s => s.status === 'rejected').length;
+        const pending = submissionsForCurrentPeriod.filter(s => s.status === 'pending').length;
+        const notSubmitted = assignedPrograms.length - programsWithSubmissions.size;
+
+        return { approved, rejected, pending, notSubmitted, total: assignedPrograms.length };
+    }, [user, submissions, programs, facilityUsers]);
 
     const StatusBadge = ({ status }) => {
         const baseClasses = "px-2 py-1 text-xs font-semibold rounded-full inline-flex items-center";
@@ -63,26 +125,61 @@ const FacilityAdminDashboard = ({ user, users, submissions, onlineStatuses, onNa
                 <div className="lg:col-span-2 space-y-6">
                     {/* Compliance Overview */}
                     <div className="bg-white p-6 rounded-lg shadow-md">
-                        <h2 className="text-xl font-semibold mb-4">This Month's Compliance</h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
+                        <h2 className="text-xl font-semibold mb-4">Current Compliance Status ({complianceStats.total} Programs)</h2>
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-center">
                             <div className="bg-green-50 p-4 rounded-lg">
                                 <p className="text-3xl font-bold text-green-600">{complianceStats.approved}</p>
-                                <p className="text-sm font-medium text-green-700">Approved</p>
+                                <p className="text-sm font-medium text-green-700">Approved Files</p>
                             </div>
                             <div className="bg-yellow-50 p-4 rounded-lg">
                                 <p className="text-3xl font-bold text-yellow-600">{complianceStats.pending}</p>
-                                <p className="text-sm font-medium text-yellow-700">Pending</p>
+                                <p className="text-sm font-medium text-yellow-700">Pending Files</p>
                             </div>
                             <div className="bg-red-50 p-4 rounded-lg">
                                 <p className="text-3xl font-bold text-red-600">{complianceStats.rejected}</p>
-                                <p className="text-sm font-medium text-red-700">Rejected</p>
+                                <p className="text-sm font-medium text-red-700">Rejected Files</p>
+                            </div>
+                             <div className="bg-gray-50 p-4 rounded-lg">
+                                <p className="text-3xl font-bold text-gray-600">{complianceStats.notSubmitted}</p>
+                                <p className="text-sm font-medium text-gray-700">Programs Awaiting Submission</p>
                             </div>
                         </div>
                     </div>
 
-                    {/* Recent Submissions */}
+                    {/* --- NEW: Program Assignment Matrix --- */}
                     <div className="bg-white p-6 rounded-lg shadow-md">
-                        <h2 className="text-xl font-semibold mb-4">Recent Submissions</h2>
+                        <h2 className="text-xl font-semibold mb-4">Program Assignment Matrix</h2>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+                                    <tr>
+                                        <th className="p-2">User</th>
+                                        {facilityPrograms.map(program => (
+                                            <th key={program.id} className="p-2 text-center">{program.name}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {facilityUsers.map(u => (
+                                        <tr key={u.id} className="border-b last:border-b-0">
+                                            <td className="p-2 font-medium text-gray-800">{u.name}</td>
+                                            {facilityPrograms.map(program => (
+                                                <td key={program.id} className="p-2 text-center">
+                                                    {u.assignedPrograms?.includes(program.id) && (
+                                                        <CheckSquare className="w-5 h-5 text-green-500 mx-auto" />
+                                                    )}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* --- UPDATED: Recent Submissions moved into the main content column --- */}
+                    <div className="bg-white p-6 rounded-lg shadow-md">
+                        <h2 className="text-xl font-semibold mb-4">This Week's Activity</h2>
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead className="text-left text-gray-500">
@@ -94,7 +191,7 @@ const FacilityAdminDashboard = ({ user, users, submissions, onlineStatuses, onNa
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {recentSubmissions.length > 0 ? recentSubmissions.map(sub => (
+                                    {weeklySubmissions.length > 0 ? weeklySubmissions.map(sub => (
                                         <tr key={sub.id} className="border-t">
                                             <td className="p-2 font-medium text-gray-800">{sub.programName}</td>
                                             <td className="p-2">{sub.userName}</td>
@@ -103,7 +200,7 @@ const FacilityAdminDashboard = ({ user, users, submissions, onlineStatuses, onNa
                                         </tr>
                                     )) : (
                                         <tr>
-                                            <td colSpan="4" className="text-center p-4 text-gray-500">No recent submissions.</td>
+                                            <td colSpan="4" className="text-center p-4 text-gray-500">No submissions this week.</td>
                                         </tr>
                                     )}
                                 </tbody>
