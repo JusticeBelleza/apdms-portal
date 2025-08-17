@@ -48,16 +48,27 @@ The project follows a standard Create React App structure with a logical organiz
 
 /
 ├── functions/              # Backend Cloud Functions for Firebase
+
 ├── public/                 # Static assets and index.html
+
 ├── src/
+
 │   ├── components/         # Reusable React components (modals, layout, etc.)
+
 │   ├── context/            # React Context for global state (UserContext)
+
 │   ├── firebase/           # Firebase configuration and initialization
+
 │   ├── pages/              # Top-level page components
+
 │   ├── utils/              # Helper functions and utilities
+
 │   └── App.js              # Main application component with routing
+
 ├── firebase.json           # Firebase project configuration
+
 ├── firestore.rules         # **CRITICAL:** Security rules for Firestore
+
 └── storage.rules           # **CRITICAL:** Security rules for Cloud Storage
 
 🚨 CRITICAL SECURITY WARNING 🚨
